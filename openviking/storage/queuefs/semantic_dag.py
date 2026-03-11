@@ -51,8 +51,7 @@ class SemanticDagExecutor:
         incremental_update: bool = False,
         target_uri: Optional[str] = None,
         semantic_msg_id: Optional[str] = None,
-        lock_resource_uri: str = "",
-        lock_id: str = "",
+        recursive: bool = True,
     ):
         self._processor = processor
         self._context_type = context_type
@@ -61,8 +60,7 @@ class SemanticDagExecutor:
         self._incremental_update = incremental_update
         self._target_uri = target_uri
         self._semantic_msg_id = semantic_msg_id
-        self._lock_resource_uri = lock_resource_uri
-        self._lock_id = lock_id
+        self._recursive = recursive
         self._llm_sem = asyncio.Semaphore(max_concurrent_llm)
         self._viking_fs = get_viking_fs()
         self._nodes: Dict[str, DirNode] = {}
@@ -76,31 +74,9 @@ class SemanticDagExecutor:
         
         self._root_uri = root_uri
         self._root_done = asyncio.Event()
-        from .embedding_tracker import EmbeddingTaskTracker
-        if self._semantic_msg_id and self._lock_resource_uri and self._lock_id:
-            tracker = EmbeddingTaskTracker.get_instance()
-            on_complete = self._processor._create_sync_diff_callback(
-                    root_uri,self._lock_resource_uri, self._lock_id
-                )
-            await tracker.register(
-                semantic_msg_id=self._semantic_msg_id,
-                total_count=1,
-                on_complete=on_complete,
-                metadata={
-                    "uri": self._root_uri,
-                    "lock_resource_uri": self._lock_resource_uri,
-                    "lock_id": self._lock_id    
-                }
-            )
-
         
         await self._dispatch_dir(root_uri, parent_uri=None)
         await self._root_done.wait()
-        if self._semantic_msg_id and self._lock_resource_uri and self._lock_id:
-            tracker = EmbeddingTaskTracker.get_instance()
-            await tracker.decrement(
-                semantic_msg_id=self._semantic_msg_id,
-            )
 
     async def _dispatch_dir(self, dir_uri: str, parent_uri: Optional[str]) -> None:
         """Lazy-dispatch tasks for a directory when it is triggered."""
@@ -114,7 +90,10 @@ class SemanticDagExecutor:
             children_dirs, file_paths = await self._list_dir(dir_uri)
             file_index = {path: idx for idx, path in enumerate(file_paths)}
             child_index = {path: idx for idx, path in enumerate(children_dirs)}
-            pending = len(children_dirs) + len(file_paths)
+            if self._recursive:
+                pending = len(children_dirs) + len(file_paths)
+            else:
+                pending = len(file_paths)
             logger.debug(f"Dispatching directory {dir_uri} with {pending} pending tasks")
 
             node = DirNode(
@@ -146,9 +125,9 @@ class SemanticDagExecutor:
 
             if children_dirs:
                 logger.debug(f"Enqueued {dir_uri} child directories for dispatch: {children_dirs}")
-            
-            for child_uri in children_dirs:
-                asyncio.create_task(self._dispatch_dir(child_uri, dir_uri))
+                if self._recursive:
+                    for child_uri in children_dirs:
+                        asyncio.create_task(self._dispatch_dir(child_uri, dir_uri))
         except Exception as e:
             logger.error(f"Failed to dispatch directory {dir_uri}: {e}", exc_info=True)
             if parent_uri:
@@ -306,8 +285,6 @@ class SemanticDagExecutor:
                         summary_dict=summary_dict,
                         ctx=self._ctx,
                         semantic_msg_id=self._semantic_msg_id,
-                        lock_resource_uri=self._lock_resource_uri,
-                        lock_id=self._lock_id,
                     )
                 )
         except Exception as e:
@@ -416,12 +393,10 @@ class SemanticDagExecutor:
             try:
                 if need_vectorize:
                     logger.debug(f"Enqueued directory L0 (abstract) for vectorization: {dir_uri}")
-                    await self._processor._vectorize_directory_simple(
+                    await self._processor._vectorize_directory(
                         dir_uri, self._context_type, abstract, overview, ctx=self._ctx,
                         semantic_msg_id=self._semantic_msg_id,
-                    lock_resource_uri=self._lock_resource_uri,
-                    lock_id=self._lock_id,
-                )
+                    )
             except Exception as e:
                 logger.error(f"Failed to vectorize directory {dir_uri}: {e}", exc_info=True)
 

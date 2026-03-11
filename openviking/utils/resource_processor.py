@@ -17,11 +17,6 @@ from openviking.utils.embedding_utils import index_resource
 from openviking.utils.summarizer import Summarizer
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.storage import StoragePath
-from openviking.resource.resource_lock import (
-    LockInfo,
-    ResourceLockConflictError,
-    ResourceLockManager,
-)
 
 if TYPE_CHECKING:
     from openviking.parse.vlm import VLMProcessor
@@ -44,16 +39,33 @@ class ResourceProcessor:
 
     def __init__(
         self,
+        vikingdb: VikingDBManager,
         media_storage: Optional["StoragePath"] = None,
         max_context_size: int = 2000,
         max_split_depth: int = 3,
     ):
         """Initialize coordinated writer."""
+        self.vikingdb = vikingdb
+        self.embedder = vikingdb.get_embedder()
         self.media_storage = media_storage
         self.tree_builder = TreeBuilder()
         self._vlm_processor = None
         self._media_processor = None
+        self._summarizer = None
 
+    def _get_summarizer(self) -> "Summarizer":
+        """Lazy initialization of Summarizer."""
+        if self._summarizer is None:
+            self._summarizer = Summarizer(self._get_vlm_processor())
+        return self._summarizer
+
+    def _get_vlm_processor(self) -> "VLMProcessor":
+        """Lazy initialization of VLM processor."""
+        if self._vlm_processor is None:
+            from openviking.parse.vlm import VLMProcessor
+
+            self._vlm_processor = VLMProcessor()
+        return self._vlm_processor
 
     def _get_media_processor(self):
         """Lazy initialization of unified media processor."""
@@ -66,6 +78,19 @@ class ResourceProcessor:
             )
         return self._media_processor
 
+    async def build_index(
+        self, resource_uris: List[str], ctx: RequestContext, **kwargs
+    ) -> Dict[str, Any]:
+        """Expose index building as a standalone method."""
+        for uri in resource_uris:
+            await index_resource(uri, ctx)
+        return {"status": "success", "message": f"Indexed {len(resource_uris)} resources"}
+
+    async def summarize(
+        self, resource_uris: List[str], ctx: RequestContext, **kwargs
+    ) -> Dict[str, Any]:
+        """Expose summarization as a standalone method."""
+        return await self._get_summarizer().summarize(resource_uris, ctx, **kwargs)
 
     async def process_resource(
         self,
@@ -77,6 +102,7 @@ class ResourceProcessor:
         user: Optional[str] = None,
         to: Optional[str] = None,
         parent: Optional[str] = None,
+        summarize: bool = False,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -93,12 +119,6 @@ class ResourceProcessor:
             "errors": [],
             "source_path": None,
         }
-
-        if target:
-            if not target.startswith("viking://"):
-                target = f"viking://resources/{target}"
-            logger.info(f"Using target location: {target}")
-        logger.info(f"Processing resource: {path} (scope={scope}, user={user}, reason={reason}, instruction={instruction}, target={target})")
 
         # ============ Phase 1: Parse source and writes to temp viking fs ============
         try:
@@ -146,6 +166,7 @@ class ResourceProcessor:
         # ============ Phase 2: Pass to and parent directly to TreeBuilder ============
         # ============ Phase 3: TreeBuilder finalizes from temp (scan + move to AGFS) ============
         try:
+            logger.debug(f"[ResourceProcessor] Calling finalize_from_temp with to={to!r}, parent={parent!r}")
             with get_viking_fs().bind_request_context(ctx):
                 context_tree = await self.tree_builder.finalize_from_temp(
                     temp_dir_path=parse_result.temp_dir_path,
@@ -155,10 +176,10 @@ class ResourceProcessor:
                     parent_uri=parent,
                     source_path=parse_result.source_path,
                     source_format=parse_result.source_format,
-                    **kwargs,
                 )
                 if context_tree and context_tree.root:
                     result["root_uri"] = context_tree.root.uri
+                    result["temp_uri"] = context_tree.root.temp_uri
         except Exception as e:
             result["status"] = "error"
             result["errors"].append(f"Finalize from temp error: {e}")
@@ -171,4 +192,36 @@ class ResourceProcessor:
                 pass
 
             return result
+
+        # ============ Phase 4: Optional Steps ============
+        build_index = kwargs.get("build_index", True)
+        temp_uri_for_summarize = result.get("temp_uri") or parse_result.temp_dir_path
+        if summarize:
+            # Explicit summarization request.
+            # If build_index is ALSO True, we want vectorization.
+            # If build_index is False, we skip vectorization.
+            skip_vec = not build_index
+            try:
+                await self._get_summarizer().summarize(
+                    resource_uris=[result["root_uri"]],
+                    ctx=ctx,
+                    skip_vectorization=skip_vec,
+                    temp_uris = [temp_uri_for_summarize]
+                    **kwargs,
+                )
+            except Exception as e:
+                logger.error(f"Summarization failed: {e}")
+                result["warnings"] = result.get("warnings", []) + [f"Summarization failed: {e}"]
+
+        elif build_index:
+            # Standard compatibility mode: "Just Index it" usually implies ingestion flow.
+            # We assume this means "Ingest and Index", which requires summarization.
+            try:
+                await self._get_summarizer().summarize(
+                    resource_uris=[result["root_uri"]], ctx=ctx, skip_vectorization=False,temp_uris = [temp_uri_for_summarize], **kwargs
+                )
+            except Exception as e:
+                logger.error(f"Auto-index failed: {e}")
+                result["warnings"] = result.get("warnings", []) + [f"Auto-index failed: {e}"]
+
         return result

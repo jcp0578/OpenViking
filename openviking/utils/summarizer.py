@@ -27,48 +27,49 @@ class Summarizer:
 
     async def summarize(
         self,
-        resource_uri: str,
+        resource_uris: List[str],
         ctx: "RequestContext",
         skip_vectorization: bool = False,
-        target_uri: str = "",
-        **kwargs
+        **kwargs,
     ) -> Dict[str, Any]:
         """
         Summarize the given resources.
         Triggers SemanticQueue to generate .abstract.md and .overview.md.
-        
-        Args:
-            resource_uris: List of resource URIs to summarize
-            ctx: Request context
-            skip_vectorization: Whether to skip vectorization
-            lock_resource_uri: Resource URI for lock release on completion
-            lock_id: Lock ID for release on completion
         """
-        logger.info(f"Summarizing resources: {resource_uris} (skip_vectorization={skip_vectorization}, is_incremental_update={is_incremental_update}, target_uri={target_uri}, lock_resource_uri={lock_resource_uri}, lock_id={lock_id})")
         queue_manager = get_queue_manager()
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
 
+        temp_uris = kwargs.get("temp_uris", [])
+        if temp_uris == []:
+            temp_uris = resource_uris
+        if len(temp_uris) != len(resource_uris):
+            logger.error(
+                f"temp_uris length ({len(temp_uris)}) must match resource_uris length ({len(resource_uris)})"
+            )
+            return {"status": "error", "message": "temp_uris length must match resource_uris length"}
         enqueued_count = 0
-        context_type = "resource"
-        if resource_uri.startswith("viking://memory/"):
-            context_type = "memory"
-        elif resource_uri.startswith("viking://agent/skills/"):
-            context_type = "skill"
+        for uri, temp_uri in zip(resource_uris, temp_uris):
+            # Determine context_type based on URI
+            context_type = "resource"
+            if uri.startswith("viking://memory/"):
+                context_type = "memory"
+            elif uri.startswith("viking://agent/skills/"):
+                context_type = "skill"
 
-        msg = SemanticMsg(
-            uri=resource_uri,
-            context_type=context_type,
-            account_id=ctx.account_id,
-            user_id=ctx.user.user_id,
-            agent_id=ctx.user.agent_id,
-            role=ctx.role.value,
-            skip_vectorization=skip_vectorization,
-            target_uri=target_uri,
-        )
-        await semantic_queue.enqueue(msg)
-        enqueued_count += 1
-        logger.info(
-            f"Enqueued semantic generation for: {uri} (skip_vectorization={skip_vectorization})"
-        )
+            msg = SemanticMsg(
+                uri=temp_uri,
+                context_type=context_type,
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+                agent_id=ctx.user.agent_id,
+                role=ctx.role.value,
+                skip_vectorization=skip_vectorization,
+                target_uri=uri,
+            )
+            await semantic_queue.enqueue(msg)
+            enqueued_count += 1
+            logger.info(
+                f"Enqueued semantic generation for: {uri} (skip_vectorization={skip_vectorization})"
+            )
 
         return {"status": "success", "enqueued_count": enqueued_count}

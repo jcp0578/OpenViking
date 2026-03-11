@@ -4,7 +4,7 @@
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple,Callable,Awaitable
 
 from openviking.parse.parsers.constants import (
     CODE_EXTENSIONS,
@@ -92,6 +92,61 @@ class SemanticProcessor(DequeueHandlerBase):
             role=role,
         )
 
+    async def _acquire_path_lock(
+        self,
+        resource_uri: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
+        """Acquire path lock to prevent concurrent processing of the same path."""
+        from openviking.resource.resource_lock import ResourceLockManager, ResourceLockConflictError
+        
+        viking_fs = get_viking_fs()
+        if not hasattr(viking_fs, 'agfs') or not viking_fs.agfs:
+            logger.warning("Cannot acquire path lock: agfs not available")
+            return None
+        
+        lock_manager = ResourceLockManager(viking_fs.agfs)
+        
+        try:
+            lock_info = lock_manager.acquire_lock(
+                resource_uri=resource_uri,
+                operation="path_processing",
+                metadata=metadata or {},
+            )
+            logger.info(f"Acquired path lock for {resource_uri}, lock_id={lock_info.lock_id}")
+            return lock_info.lock_id
+        except ResourceLockConflictError as e:
+            logger.warning(f"Path lock conflict for {resource_uri}: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Failed to acquire path lock for {resource_uri}: {e}")
+            return None
+
+    async def _release_path_lock(
+        self,
+        resource_uri: str,
+        lock_id: Optional[str],
+    ) -> bool:
+        """Release path lock."""
+        if not resource_uri or not lock_id:
+            return False
+        
+        from openviking.resource.resource_lock import ResourceLockManager
+        
+        viking_fs = get_viking_fs()
+        if not hasattr(viking_fs, 'agfs') or not viking_fs.agfs:
+            return False
+        
+        lock_manager = ResourceLockManager(viking_fs.agfs)
+        success = lock_manager.release_lock(resource_uri, lock_id)
+        
+        if success:
+            logger.info(f"Released path lock for {resource_uri}, lock_id={lock_id}")
+        else:
+            logger.warning(f"Failed to release path lock for {resource_uri}, lock_id={lock_id}")
+        
+        return success
+
     def _detect_file_type(self, file_name: str) -> str:
         """
         Detect file type based on extension using constants from code parser.
@@ -117,55 +172,21 @@ class SemanticProcessor(DequeueHandlerBase):
         # Default to other
         return FILE_TYPE_OTHER
 
-    async def _enqueue_semantic_msg(self, msg: SemanticMsg) -> None:
-        """Enqueue a SemanticMsg to the semantic queue for processing."""
-        from openviking.storage.queuefs import get_queue_manager
-
-        queue_manager = get_queue_manager()
-        semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC)
-        # The queue manager returns SemanticQueue but method signature says NamedQueue
-        # We need to ignore the type error for the enqueue call
-        await semantic_queue.enqueue(msg)  # type: ignore
-        logger.debug(f"Enqueued semantic message for processing: {msg.uri}")
-
-    async def _collect_directory_info(
-        self,
-        uri: str,
-        result: List[Tuple[str, List[str], List[str]]],
-    ) -> None:
-        """Recursively collect directory info, post-order traversal ensures bottom-up order."""
+    async def _check_file_content_changed(self, file_path: str, target_file: str) -> bool:
+        """Check if file content has changed compared to target file."""
         viking_fs = get_viking_fs()
-
         try:
-            entries = await viking_fs.ls(uri, ctx=self._current_ctx)
-        except Exception as e:
-            logger.warning(f"Failed to list directory {uri}: {e}")
-            return
-
-        children_uris = []
-        file_paths = []
-
-        for entry in entries:
-            name = entry.get("name", "")
-            if not name or name.startswith(".") or name in [".", ".."]:
-                continue
-
-            item_uri = VikingURI(uri).join(name).uri
-
-            if entry.get("isDir", False):
-                # Child directory
-                children_uris.append(item_uri)
-                # Recursively collect children
-                await self._collect_directory_info(item_uri, result)
-            else:
-                # File (not starting with .)
-                file_paths.append(item_uri)
-
-        # Add current directory info
-        result.append((uri, children_uris, file_paths))
+            current_content = await viking_fs.read_file(file_path, ctx=self._current_ctx)
+            target_content = await viking_fs.read_file(target_file, ctx=self._current_ctx)
+            return current_content != target_content
+        except Exception:
+            return True
 
     async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """Process dequeued SemanticMsg, recursively process all subdirectories."""
+        target_lock_id: Optional[str] = None
+        source_lock_id: Optional[str] = None
+        
         try:
             import json
 
@@ -184,221 +205,85 @@ class SemanticProcessor(DequeueHandlerBase):
                 f"Processing semantic generation for: {msg})"
             )
 
-            if msg.recursive:
-                executor = SemanticDagExecutor(
-                    processor=self,
-                    context_type=msg.context_type,
-                    max_concurrent_llm=self.max_concurrent_llm,
-                    ctx=self._current_ctx,
-                    incremental_update=msg.is_incremental_update,
-                    target_uri=msg.target_uri if msg.target_uri else None,
-                    semantic_msg_id=msg.id,
-                    lock_resource_uri=msg.lock_resource_uri,
-                    lock_id=msg.lock_id,
-                )
-                self._dag_executor = executor
-                await executor.run(msg.uri)
-                logger.info(f"Completed semantic generation for: {msg.uri}")
-                self.report_success()
-                return None
-            else:
-                children_uris = []
-                file_paths = []
+            # Check if target_uri exists, auto-detect incremental update
+            is_incremental = False
+            viking_fs = get_viking_fs()
+            if msg.target_uri:
+                target_exists = await viking_fs.exists(msg.target_uri, ctx=self._current_ctx)
+                if target_exists:
+                    is_incremental = True
+                    logger.info(f"Target URI exists, using incremental update: {msg.target_uri}")
 
-                viking_fs = get_viking_fs()
-                try:
-                    entries = await viking_fs.ls(msg.uri, ctx=self._current_ctx)
-                    for entry in entries:
-                        name = entry.get("name", "")
-                        if not name or name.startswith(".") or name in [".", ".."]:
-                            continue
-
-                        item_uri = VikingURI(msg.uri).join(name).uri
-
-                        if entry.get("isDir", False):
-                            children_uris.append(item_uri)
-                        else:
-                            file_paths.append(item_uri)
-                except Exception as e:
-                    logger.warning(f"Failed to list directory {msg.uri}: {e}")
-
-                incremental_update = msg.is_incremental_update
-                target_uri = msg.target_uri if msg.target_uri else None
-
-                if incremental_update and target_uri:
-                    children_changed = await self._check_dir_children_changed(
-                        msg.uri, file_paths, children_uris, target_uri
-                    )
-                    if not children_changed:
-                        overview, abstract = await self._read_existing_overview_abstract(
-                            msg.uri, target_uri
-                        )
-                        if overview and abstract:
-                            await viking_fs.write_file(f"{msg.uri}/.overview.md", overview, ctx=self._current_ctx)
-                            await viking_fs.write_file(f"{msg.uri}/.abstract.md", abstract, ctx=self._current_ctx)
-                            logger.debug(f"Reused overview and abstract for {msg.uri}")
-                            try:
-                                embedding_count = 2
-                                await self._register_embedding_tracker(
-                                    msg.id, embedding_count, msg.uri,
-                                    lock_resource_uri=msg.lock_resource_uri,
-                                    lock_id=msg.lock_id
-                                )
-                                await self._vectorize_directory_simple(
-                                    msg.uri, msg.context_type, abstract, overview,
-                                    semantic_msg_id=msg.id
-                                )
-                            except Exception as e:
-                                logger.error(f"Failed to vectorize directory {msg.uri}: {e}", exc_info=True)
-                            logger.info(f"Completed semantic generation for: {msg.uri}")
-                            self.report_success()
-                            return None
-
-                await self._process_single_directory(
-                    uri=msg.uri,
-                    context_type=msg.context_type,
-                    children_uris=children_uris,
-                    file_paths=file_paths,
-                    incremental_update=incremental_update,
-                    target_uri=target_uri,
-                    semantic_msg_id=msg.id,
-                    lock_resource_uri=msg.lock_resource_uri,
-                    lock_id=msg.lock_id,
+            # Acquire target_uri path lock
+            if msg.target_uri:
+                target_lock_id = await self._acquire_path_lock(
+                    resource_uri=msg.target_uri,
+                    metadata={"msg_id": msg.id, "uri": msg.uri},
                 )
 
-                logger.info(f"Completed semantic generation for: {msg.uri}")
-                self.report_success()
-                return None
+            # Acquire uri path lock if uri != target_uri
+            if msg.uri != msg.target_uri and msg.uri:
+                source_lock_id = await self._acquire_path_lock(
+                    resource_uri=msg.uri,
+                    metadata={"msg_id": msg.id, "target_uri": msg.target_uri},
+                )
 
+            tracker = EmbeddingTaskTracker.get_instance()
+            on_complete = self._create_sync_diff_callback(
+                root_uri=msg.uri,
+                target_uri=msg.target_uri,
+                root_lock_id=source_lock_id,
+                target_lock_id=target_lock_id,
+            )
+            await tracker.register(
+                semantic_msg_id=msg.id,
+                total_count=1,
+                on_complete=on_complete,
+                metadata={
+                    "uri": msg.uri,
+                    "root_lock_id": source_lock_id,
+                    "target_lock_id": target_lock_id,
+                }
+            )
+            executor = SemanticDagExecutor(
+                processor=self,
+                context_type=msg.context_type,
+                max_concurrent_llm=self.max_concurrent_llm,
+                ctx=self._current_ctx,
+                incremental_update=is_incremental,
+                target_uri=msg.target_uri,
+                semantic_msg_id=msg.id,
+                recursive=msg.recursive,
+            )
+            self._dag_executor = executor
+            await executor.run(msg.uri)
+            logger.info(f"Completed semantic generation for: {msg.uri}")
+            self.report_success()
+            return None
+           
         except Exception as e:
             logger.error(f"Failed to process semantic message: {e}", exc_info=True)
             self.report_error(str(e), data)
             return None
         finally:
+            tracker = EmbeddingTaskTracker.get_instance()
+            await tracker.decrement(
+                semantic_msg_id=msg.id,
+            )
             self._current_msg = None
+            self._current_ctx = None
 
     def get_dag_stats(self) -> Optional["DagStats"]:
         if not self._dag_executor:
             return None
         return self._dag_executor.get_stats()
-
-    async def _process_single_directory(
-        self,
-        uri: str,
-        context_type: str,
-        children_uris: List[str],
-        file_paths: List[str],
-        incremental_update: bool = False,
-        target_uri: Optional[str] = None,
-        semantic_msg_id: Optional[str] = None,
-        lock_resource_uri: str = "",
-        lock_id: str = "",
-    ) -> None:
-        """Process single directory, generate .abstract.md and .overview.md."""
-        viking_fs = get_viking_fs()
-
-        children_abstracts = await self._collect_children_abstracts(children_uris)
-
-        file_summaries = await self._generate_file_summaries(
-            file_paths, 
-            context_type=context_type, 
-            parent_uri=uri, 
-            enqueue_files=True,
-            incremental_update=incremental_update,
-            target_uri=target_uri,
-            semantic_msg_id=semantic_msg_id,
-        )
-
-        overview = await self._generate_overview(uri, file_summaries, children_abstracts)
-
-        abstract = self._extract_abstract_from_overview(overview)
-
-        await viking_fs.write_file(f"{uri}/.overview.md", overview, ctx=self._current_ctx)
-        await viking_fs.write_file(f"{uri}/.abstract.md", abstract, ctx=self._current_ctx)
-
-        logger.debug(f"Generated overview and abstract for {uri}")
-
-        try:
-            embedding_count = len(file_paths) + 2
-            await self._register_embedding_tracker(
-                semantic_msg_id, embedding_count, uri,
-                lock_resource_uri=lock_resource_uri,
-                lock_id=lock_id
-            )
-            await self._vectorize_directory_simple(uri, context_type, abstract, overview, semantic_msg_id=semantic_msg_id)
-        except Exception as e:
-            logger.error(f"Failed to vectorize directory {uri}: {e}", exc_info=True)
-    
-    async def _register_embedding_tracker(
-        self,
-        semantic_msg_id: Optional[str],
-        total_count: int,
-        uri: str,
-        lock_resource_uri: str = "",
-        lock_id: str = "",
-    ) -> None:
-        """Register embedding task tracker for a SemanticMsg.
         
-        Args:
-            semantic_msg_id: The ID of the SemanticMsg
-            total_count: Total number of embedding tasks
-            uri: The URI being processed
-            lock_resource_uri: Resource URI for lock release on completion
-            lock_id: Lock ID for release on completion
-        """
-        if not semantic_msg_id or total_count <= 0:
-            return
-        
-        from .embedding_tracker import EmbeddingTaskTracker
-        tracker = EmbeddingTaskTracker.get_instance()
-        
-        on_complete = None
-        if lock_resource_uri and lock_id:
-            on_complete = self._create_lock_release_callback(lock_resource_uri, lock_id)
-        
-        await tracker.register(
-            semantic_msg_id=semantic_msg_id,
-            total_count=total_count,
-            on_complete=on_complete,
-            metadata={"uri": uri, "lock_resource_uri": lock_resource_uri, "lock_id": lock_id}
-        )
-    
-    def _create_lock_release_callback(self, lock_resource_uri: str, lock_id: str):
-        """Create a callback function to release the resource lock.
-        
-        Args:
-            lock_resource_uri: Resource URI to release lock for
-            lock_id: Lock ID to release
-            
-        Returns:
-            Async callback function
-        """
-        async def release_lock_callback():
-            try:
-                from openviking.resource.resource_lock import ResourceLockManager
-                viking_fs = get_viking_fs()
-                if hasattr(viking_fs, 'agfs') and viking_fs.agfs:
-                    lock_manager = ResourceLockManager(viking_fs.agfs)
-                    success = lock_manager.release_lock(
-                        resource_uri=lock_resource_uri,
-                        lock_id=lock_id,
-                    )
-                    if success:
-                        logger.info(f"Released lock for resource {lock_resource_uri}, lock_id={lock_id}")
-                    else:
-                        logger.warning(f"Failed to release lock for resource {lock_resource_uri}, lock_id={lock_id}")
-                else:
-                    logger.warning("Cannot release lock: agfs not available")
-            except Exception as e:
-                logger.error(f"Error releasing lock for {lock_resource_uri}: {e}", exc_info=True)
-        
-        return release_lock_callback
-
     def _create_sync_diff_callback(
         self,
         root_uri: str,
         target_uri: str,
-        lock_id: str,
+        root_lock_id: Optional[str] = None,
+        target_lock_id: Optional[str] = None,
     ) -> Callable[[], Awaitable[None]]:
         """
         Create a callback function to sync directory differences.
@@ -409,7 +294,8 @@ class SemanticProcessor(DequeueHandlerBase):
         Args:
             root_uri: Source directory URI (new content)
             target_uri: Target directory URI (old content)
-            lock_id: Lock ID to release after completion
+            root_lock_id: Lock ID for root_uri
+            target_lock_id: Lock ID for target_uri
 
         Returns:
             Async callback function
@@ -418,39 +304,9 @@ class SemanticProcessor(DequeueHandlerBase):
         async def sync_diff_callback() -> None:
             logger.info(
                 f"[SyncDiff] Starting sync diff callback: "
-                f"root_uri={root_uri}, target_uri={target_uri}, lock_id={lock_id}"
+                f"root_uri={root_uri}, target_uri={target_uri}, "
+                f"root_lock_id={root_lock_id}, target_lock_id={target_lock_id}"
             )
-            
-            if root_uri == target_uri:
-                logger.warning(
-                    f"[SyncDiff] root_uri and target_uri are the same ({root_uri}), "
-                    f"skipping diff comparison and sync operations, releasing lock directly"
-                )
-                try:
-                    viking_fs = get_viking_fs()
-                    from openviking.resource.resource_lock import ResourceLockManager
-                    if hasattr(viking_fs, 'agfs') and viking_fs.agfs:
-                        lock_manager = ResourceLockManager(viking_fs.agfs)
-                        success = lock_manager.release_lock(
-                            resource_uri=target_uri,
-                            lock_id=lock_id,
-                        )
-                        if success:
-                            logger.info(
-                                f"[SyncDiff] Successfully released lock for {target_uri}, lock_id={lock_id}"
-                            )
-                        else:
-                            logger.warning(
-                                f"[SyncDiff] Failed to release lock for {target_uri}, lock_id={lock_id}"
-                            )
-                    else:
-                        logger.warning("[SyncDiff] Cannot release lock: agfs not available")
-                except Exception as e:
-                    logger.error(
-                        f"[SyncDiff] Error releasing lock for {target_uri}: {e}",
-                        exc_info=True
-                    )
-                return
             
             try:
                 viking_fs = get_viking_fs()
@@ -503,24 +359,16 @@ class SemanticProcessor(DequeueHandlerBase):
                 except Exception as e:
                     logger.warning(f"[SyncDiff] Failed to delete root directory {root_uri}: {e}")
                 
-                logger.info(f"[SyncDiff] Step 6: Releasing lock for {target_uri}")
-                from openviking.resource.resource_lock import ResourceLockManager
-                if hasattr(viking_fs, 'agfs') and viking_fs.agfs:
-                    lock_manager = ResourceLockManager(viking_fs.agfs)
-                    success = lock_manager.release_lock(
-                        resource_uri=target_uri,
-                        lock_id=lock_id,
+                logger.info(f"[SyncDiff] Step 6: Releasing locks")
+                try:
+                    await self._release_path_lock(root_uri, root_lock_id)
+                    if target_uri != root_uri:
+                        await self._release_path_lock(target_uri, target_lock_id)
+                except Exception as e:
+                    logger.error(
+                        f"[SyncDiff] Error releasing locks: {e}",
+                        exc_info=True
                     )
-                    if success:
-                        logger.info(
-                            f"[SyncDiff] Successfully released lock for {target_uri}, lock_id={lock_id}"
-                        )
-                    else:
-                        logger.warning(
-                            f"[SyncDiff] Failed to release lock for {target_uri}, lock_id={lock_id}"
-                        )
-                else:
-                    logger.warning("[SyncDiff] Cannot release lock: agfs not available")
                 
                 logger.info(
                     f"[SyncDiff] Sync diff callback completed successfully: "
@@ -530,7 +378,7 @@ class SemanticProcessor(DequeueHandlerBase):
             except Exception as e:
                 logger.error(
                     f"[SyncDiff] Error in sync_diff_callback: "
-                    f"root_uri={root_uri}, target_uri={target_uri}, lock_id={lock_id}, "
+                    f"root_uri={root_uri}, target_uri={target_uri}"
                     f"error={e}",
                     exc_info=True
                 )
@@ -783,6 +631,12 @@ class SemanticProcessor(DequeueHandlerBase):
                 logger.debug(
                     f"[SyncDiff] Moving file [{i}/{len(files_to_move)}]: {root_file} -> {target_file}"
                 )
+                target_parent = VikingURI(target_file).parent
+                if target_parent:
+                    try:
+                        await viking_fs.mkdir(target_parent.uri, exist_ok=True, ctx=self._current_ctx)
+                    except Exception as mkdir_error:
+                        logger.debug(f"[SyncDiff] Parent dir creation skipped (may already exist): {mkdir_error}")
                 await viking_fs.mv(root_file, target_file, ctx=self._current_ctx)
                 total_moved += 1
                 logger.info(
@@ -832,51 +686,6 @@ class SemanticProcessor(DequeueHandlerBase):
             dir_name = child_uri.split("/")[-1]
             results.append({"name": dir_name, "abstract": abstract})
         return results
-
-    async def _generate_file_summaries(
-        self,
-        file_paths: List[str],
-        context_type: Optional[str] = None,
-        parent_uri: Optional[str] = None,
-        enqueue_files: bool = False,
-        incremental_update: bool = False,
-        target_uri: Optional[str] = None,
-        semantic_msg_id: Optional[str] = None,
-    ) -> List[Dict[str, str]]:
-        """Concurrently generate file summaries."""
-        if not file_paths:
-            return []
-
-        async def generate_one_summary(file_path: str) -> Dict[str, str]:
-            summary = None
-            if incremental_update and target_uri:
-                content_changed = await self._check_file_content_changed(
-                    file_path, target_uri
-                )
-                if not content_changed:
-                    summary = await self._read_existing_summary(file_path, target_uri)
-            
-            if summary is None:
-                summary = await self._generate_single_file_summary(file_path, ctx=self._current_ctx)
-            
-            if enqueue_files and context_type and parent_uri:
-                try:
-                    await self._vectorize_single_file(
-                        parent_uri=parent_uri,
-                        context_type=context_type,
-                        file_path=file_path,
-                        summary_dict=summary,
-                        semantic_msg_id=semantic_msg_id,
-                    )
-                except Exception as e:
-                    logger.error(
-                        f"Failed to vectorize file {file_path}: {e}",
-                        exc_info=True,
-                    )
-            return summary
-
-        tasks = [generate_one_summary(fp) for fp in file_paths]
-        return await asyncio.gather(*tasks)
 
     async def _generate_text_summary(
         self,
@@ -1078,7 +887,7 @@ class SemanticProcessor(DequeueHandlerBase):
             logger.error(f"Failed to generate overview for {dir_uri}: {e}", exc_info=True)
             return f"# {dir_uri.split('/')[-1]}\n\nDirectory overview"
 
-    async def _vectorize_directory_simple(
+    async def _vectorize_directory(
         self,
         uri: str,
         context_type: str,
@@ -1086,8 +895,6 @@ class SemanticProcessor(DequeueHandlerBase):
         overview: str,
         ctx: Optional[RequestContext] = None,
         semantic_msg_id: Optional[str] = None,
-        lock_resource_uri: Optional[str] = "",
-        lock_id: Optional[str] = "",
     ) -> None:
         """Create directory Context and enqueue to EmbeddingQueue."""
 
@@ -1096,14 +903,13 @@ class SemanticProcessor(DequeueHandlerBase):
             return
 
         from openviking.utils.embedding_utils import vectorize_directory_meta
-        if semantic_msg_id and lock_resource_uri and lock_id:
-            tracker = EmbeddingTaskTracker.get_instance()
-            await tracker.increment(
-                semantic_msg_id=semantic_msg_id,
-            )
-            await tracker.increment(
-                semantic_msg_id=semantic_msg_id
-            )
+        tracker = EmbeddingTaskTracker.get_instance()
+        await tracker.increment(
+            semantic_msg_id=semantic_msg_id,
+        )
+        await tracker.increment(
+            semantic_msg_id=semantic_msg_id
+        )
 
         active_ctx = ctx or self._current_ctx
         await vectorize_directory_meta(
@@ -1115,30 +921,6 @@ class SemanticProcessor(DequeueHandlerBase):
             semantic_msg_id=semantic_msg_id,
         )
 
-    async def _vectorize_files(
-        self,
-        uri: str,
-        context_type: str,
-        file_paths: List[str],
-        file_summaries: List[Dict[str, str]],
-        ctx: Optional[RequestContext] = None,
-    ) -> None:
-        """Vectorize files in directory."""
-        from openviking.storage.queuefs import get_queue_manager
-
-        queue_manager = get_queue_manager()
-        embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING)
-
-        for file_path, file_summary_dict in zip(file_paths, file_summaries):
-            await self._vectorize_single_file(
-                parent_uri=uri,
-                context_type=context_type,
-                file_path=file_path,
-                summary_dict=file_summary_dict,
-                embedding_queue=embedding_queue,
-                ctx=ctx,
-            )
-
     async def _vectorize_single_file(
         self,
         parent_uri: str,
@@ -1147,18 +929,13 @@ class SemanticProcessor(DequeueHandlerBase):
         summary_dict: Dict[str, str],
         ctx: Optional[RequestContext] = None,
         semantic_msg_id: Optional[str] = None,
-        lock_resource_uri: Optional[str] = "",
-        lock_id: Optional[str] = "",
     ) -> None:
         """Vectorize a single file using its content or summary."""
         from openviking.utils.embedding_utils import vectorize_file
-
-        if semantic_msg_id and lock_resource_uri and lock_id:
-            tracker = EmbeddingTaskTracker.get_instance()
-            await tracker.increment(
-                semantic_msg_id=semantic_msg_id,
-            )
-
+        tracker = EmbeddingTaskTracker.get_instance()
+        await tracker.increment(
+            semantic_msg_id=semantic_msg_id,
+        )
         active_ctx = ctx or self._current_ctx
         await vectorize_file(
             file_path=file_path,
@@ -1168,104 +945,3 @@ class SemanticProcessor(DequeueHandlerBase):
             ctx=active_ctx,
             semantic_msg_id=semantic_msg_id,
         )
-
-    def _get_target_file_path(self, current_uri: str, target_uri: str) -> Optional[str]:
-        """Get target file path for incremental update."""
-        try:
-            relative_path = current_uri[len(self._current_msg.uri):] if self._current_msg else ""
-            if relative_path.startswith("/"):
-                relative_path = relative_path[1:]
-            return f"{target_uri}/{relative_path}" if relative_path else target_uri
-        except Exception:
-            return None
-
-    async def _check_file_content_changed(self, file_path: str, target_uri: str) -> bool:
-        """Check if file content has changed."""
-        target_path = self._get_target_file_path(file_path, target_uri)
-        if not target_path:
-            return True
-        try:
-            viking_fs = get_viking_fs()
-            current_content = await viking_fs.read_file(file_path, ctx=self._current_ctx)
-            target_content = await viking_fs.read_file(target_path, ctx=self._current_ctx)
-            return current_content != target_content
-        except Exception:
-            return True
-
-    async def _read_existing_summary(self, file_path: str, target_uri: str) -> Optional[Dict[str, str]]:
-        """Read existing summary from vector store."""
-        target_path = self._get_target_file_path(file_path, target_uri)
-        if not target_path:
-            return None
-        try:
-            viking_fs = get_viking_fs()
-            vector_store = viking_fs._get_vector_store()
-            if not vector_store:
-                return None
-            records = await vector_store.get_context_by_uri(
-                account_id=self._current_ctx.account_id,
-                uri=target_path,
-                limit=1,
-            )
-            if records and len(records) > 0:
-                record = records[0]
-                summary = record.get("summary", "")
-                if summary:
-                    file_name = file_path.split("/")[-1]
-                    return {"name": file_name, "summary": summary}
-        except Exception:
-            pass
-        return None
-
-    async def _check_dir_children_changed(
-        self, dir_uri: str, current_files: List[str], current_dirs: List[str], target_uri: str
-    ) -> bool:
-        """Check if directory children have changed."""
-        target_path = self._get_target_file_path(dir_uri, target_uri)
-        if not target_path:
-            return True
-        try:
-            viking_fs = get_viking_fs()
-            target_entries = await viking_fs.ls(target_path, ctx=self._current_ctx)
-            target_files = []
-            target_dirs = []
-            for entry in target_entries:
-                name = entry.get("name", "")
-                if not name or name.startswith(".") or name in [".", ".."]:
-                    continue
-                if entry.get("isDir", False):
-                    target_dirs.append(name)
-                else:
-                    target_files.append(name)
-            
-            current_file_names = {f.split("/")[-1] for f in current_files}
-            target_file_names = set(target_files)
-            if current_file_names != target_file_names:
-                return True
-            
-            current_dir_names = {d.split("/")[-1] for d in current_dirs}
-            target_dir_names = set(target_dirs)
-            if current_dir_names != target_dir_names:
-                return True
-            
-            for current_file in current_files:
-                if await self._check_file_content_changed(current_file, target_uri):
-                    return True
-            return False
-        except Exception:
-            return True
-
-    async def _read_existing_overview_abstract(
-        self, dir_uri: str, target_uri: str
-    ) -> tuple[Optional[str], Optional[str]]:
-        """Read existing overview and abstract from target directory."""
-        target_path = self._get_target_file_path(dir_uri, target_uri)
-        if not target_path:
-            return None, None
-        try:
-            viking_fs = get_viking_fs()
-            overview = await viking_fs.read_file(f"{target_path}/.overview.md", ctx=self._current_ctx)
-            abstract = await viking_fs.read_file(f"{target_path}/.abstract.md", ctx=self._current_ctx)
-            return overview, abstract
-        except Exception:
-            return None, None

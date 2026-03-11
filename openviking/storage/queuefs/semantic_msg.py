@@ -23,8 +23,6 @@ class SemanticMsg:
                    When True, the processor will collect all subdirectory info and
                    enqueue them for processing (bottom-up order).
                    When False, only the specified directory will be processed.
-        lock_resource_uri: Resource URI for lock release on completion
-        lock_id: Lock ID for release on completion
     """
 
     id: str  # UUID
@@ -39,11 +37,7 @@ class SemanticMsg:
     role: str = "root"
     # Additional flags
     skip_vectorization: bool = False
-    is_incremental_update: bool = False
     target_uri: str = ""
-    # Lock release info
-    lock_resource_uri: str = ""
-    lock_id: str = ""
 
     def __init__(
         self,
@@ -55,10 +49,7 @@ class SemanticMsg:
         agent_id: str = "default",
         role: str = "root",
         skip_vectorization: bool = False,
-        is_incremental_update: bool = False,
         target_uri: str = "",
-        lock_resource_uri: str = "",
-        lock_id: str = "",
     ):
         self.id = str(uuid4())
         self.uri = uri
@@ -69,10 +60,7 @@ class SemanticMsg:
         self.agent_id = agent_id
         self.role = role
         self.skip_vectorization = skip_vectorization
-        self.is_incremental_update = is_incremental_update
         self.target_uri = target_uri
-        self.lock_resource_uri = lock_resource_uri
-        self.lock_id = lock_id
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert object to dictionary."""
@@ -108,10 +96,7 @@ class SemanticMsg:
             agent_id=data.get("agent_id", "default"),
             role=data.get("role", "root"),
             skip_vectorization=data.get("skip_vectorization", False),
-            is_incremental_update=data.get("is_incremental_update", False),
             target_uri=data.get("target_uri", ""),
-            lock_resource_uri=data.get("lock_resource_uri", ""),
-            lock_id=data.get("lock_id", ""),
         )
         if "id" in data and data["id"]:
             obj.id = data["id"]

@@ -93,7 +93,7 @@ class TreeBuilder:
         parent_uri: Optional[str] = None,
         source_path: Optional[str] = None,
         source_format: Optional[str] = None,
-        **kwargs,
+        trigger_semantic: bool = False,
     ) -> "BuildingTree":
         """
         Finalize processing by moving from temp to AGFS.
@@ -104,10 +104,7 @@ class TreeBuilder:
             trigger_semantic: Whether to automatically trigger semantic generation.
                               Default is False (handled by ResourceProcessor/Summarizer).
         """
-        trigger_semantic = kwargs.get("summary", False)
-        trigger_vectorization = kwargs.get("build_index", False)
-        trigger_semantic = trigger_vectorization or trigger_semantic
-        
+
         viking_fs = get_viking_fs()
         temp_uri = temp_dir_path
 
@@ -147,8 +144,10 @@ class TreeBuilder:
         logger.info(f"[TreeBuilder] Auto base URI: {auto_base_uri}")
         base_uri = parent_uri or auto_base_uri
         # 3. Determine candidate_uri
+        logger.debug(f"[TreeBuilder] to_uri={to_uri!r}, parent_uri={parent_uri!r}, base_uri={base_uri!r}")
         if to_uri:
             candidate_uri = to_uri
+            logger.info(f"[TreeBuilder] Using explicit to_uri: {candidate_uri}")
         else:
             if parent_uri:
                 # Parent URI must exist and be a directory
@@ -162,23 +161,6 @@ class TreeBuilder:
 
         final_uri = candidate_uri
         logger.info(f"[TreeBuilder] Finalizing from temp: {final_uri}")
-        if trigger_semantic:
-            try:    
-                await self._enqueue_semantic_generation(temp_uri,final_uri, "resource",trigger_vectorization=trigger_vectorization, ctx=update_context)
-                logger.info(f"[TreeBuilder] Enqueued semantic generation for: {final_uri} from {temp_uri}")
-            except Exception as e:
-                logger.error(f"[TreeBuilder] Failed to enqueue semantic generation: {e}", exc_info=True)
-        else:
-            # 4. Move directory tree from temp to final location in AGFS
-            await self._move_temp_to_dest(viking_fs, temp_uri, final_uri, ctx=ctx)
-            logger.info(f"[TreeBuilder] Moved temp tree: {temp_doc_uri} -> {final_uri}")
-
-            # 5. Cleanup temporary root directory
-            try:
-                await viking_fs.delete_temp(temp_uri, ctx=ctx)
-                logger.info(f"[TreeBuilder] Cleaned up temp root: {temp_uri}")
-            except Exception as e:
-                logger.warning(f"[TreeBuilder] Failed to cleanup temp root: {e}")
 
         # 7. Return simple BuildingTree (no scanning needed)
         tree = BuildingTree(
@@ -188,7 +170,7 @@ class TreeBuilder:
         tree._root_uri = final_uri
 
         # Create a minimal Context object for the root so that tree.root is not None
-        root_context = Context(uri=final_uri, temp_uri=temp_uri)
+        root_context = Context(uri=final_uri, temp_uri=temp_doc_uri)
         tree.add_context(root_context)
 
         return tree
@@ -227,7 +209,7 @@ class TreeBuilder:
                 logger.debug(f"Parent dir {parent_uri} may already exist: {e}")
 
     async def _enqueue_semantic_generation(
-        self, temp_uri: str, final_uri: str, context_type: str, trigger_vectorization: bool, ctx: RequestContext
+        self, uri: str, final_uri: str, context_type: str, ctx: RequestContext
     ) -> None:
         """
         Enqueue a directory for semantic generation.
@@ -251,6 +233,5 @@ class TreeBuilder:
             agent_id=ctx.user.agent_id,
             role=ctx.role.value,
             target_uri=final_uri,
-            trigger_vectorization=trigger_vectorization,
         )
         await semantic_queue.enqueue(msg)
