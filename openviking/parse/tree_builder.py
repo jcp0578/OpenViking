@@ -164,8 +164,6 @@ class TreeBuilder:
 
         return tree
 
-   
-
     async def _move_temp_to_dest(
         self, viking_fs, src_uri: str, dst_uri: str, ctx: RequestContext
     ) -> None:

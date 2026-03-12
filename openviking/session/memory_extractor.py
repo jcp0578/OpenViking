@@ -395,7 +395,7 @@ class MemoryExtractor:
         agent_temp_uri: Optional[str] = None,
     ) -> Optional[Context]:
         """Create Context object from candidate and persist to AGFS as .md file.
-        
+
         Args:
             candidate: Candidate memory to create
             user: User identifier
@@ -604,7 +604,11 @@ class MemoryExtractor:
             return None
 
     async def _merge_tool_memory(
-        self, tool_name: str, candidate: CandidateMemory, ctx: "RequestContext", agent_temp_uri: Optional[str] = None
+        self,
+        tool_name: str,
+        candidate: CandidateMemory,
+        ctx: "RequestContext",
+        agent_temp_uri: Optional[str] = None,
     ) -> Optional[Context]:
         """合并 Tool Memory，统计数据用 Python 累加"""
         if not tool_name or not tool_name.strip():
@@ -730,7 +734,9 @@ class MemoryExtractor:
             tool_name, merged_stats, merged_guidelines, fields=merged_fields
         )
         await viking_fs.write_file(uri=uri, content=merged_content, ctx=ctx)
-        return self._create_tool_context(uri, candidate, ctx, abstract_override=abstract_override, agent_temp_uri=agent_temp_uri)
+        return self._create_tool_context(
+            uri, candidate, ctx, abstract_override=abstract_override, agent_temp_uri=agent_temp_uri
+        )
 
     async def _enqueue_semantic_for_parent(self, file_uri: str, ctx: "RequestContext") -> None:
         """Enqueue semantic generation for parent directory."""
@@ -1189,7 +1195,11 @@ class MemoryExtractor:
         return content.strip()
 
     async def _merge_skill_memory(
-        self, skill_name: str, candidate: CandidateMemory, ctx: "RequestContext", agent_temp_uri: Optional[str] = None
+        self,
+        skill_name: str,
+        candidate: CandidateMemory,
+        ctx: "RequestContext",
+        agent_temp_uri: Optional[str] = None,
     ) -> Optional[Context]:
         """合并 Skill Memory，统计数据用 Python 累加"""
         if not skill_name or not skill_name.strip():
@@ -1332,7 +1342,9 @@ class MemoryExtractor:
             skill_name, merged_stats, merged_guidelines, fields=merged_fields
         )
         await viking_fs.write_file(uri=uri, content=merged_content, ctx=ctx)
-        return self._create_skill_context(uri, candidate, ctx, abstract_override=abstract_override, agent_temp_uri=agent_temp_uri)
+        return self._create_skill_context(
+            uri, candidate, ctx, abstract_override=abstract_override, agent_temp_uri=agent_temp_uri
+        )
 
     def _compute_skill_statistics_derived(self, stats: dict) -> dict:
         """计算 Skill 派生统计数据（成功率）"""

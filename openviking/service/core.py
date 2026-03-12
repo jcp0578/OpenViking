@@ -144,7 +144,7 @@ class OpenVikingService:
 
         # Initialize TransactionManager
         self._transaction_manager = init_transaction_manager(agfs=self._agfs_client)
-        
+
         # Initialize ResourceLockManager
         if self._agfs_client:
             self._lock_manager = ResourceLockManager(agfs=self._agfs_client)

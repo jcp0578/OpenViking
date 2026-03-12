@@ -4,7 +4,7 @@
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Tuple,Callable,Awaitable
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple
 
 from openviking.parse.parsers.constants import (
     CODE_EXTENSIONS,
@@ -30,7 +30,6 @@ from openviking_cli.utils import VikingURI
 from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
 
-
 from .embedding_tracker import EmbeddingTaskTracker
 
 logger = get_logger(__name__)
@@ -39,6 +38,7 @@ logger = get_logger(__name__)
 @dataclass
 class DiffResult:
     """Directory diff result for sync operations."""
+
     added_files: List[str] = field(default_factory=list)
     deleted_files: List[str] = field(default_factory=list)
     updated_files: List[str] = field(default_factory=list)
@@ -98,15 +98,15 @@ class SemanticProcessor(DequeueHandlerBase):
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Optional[str]:
         """Acquire path lock to prevent concurrent processing of the same path."""
-        from openviking.resource.resource_lock import ResourceLockManager, ResourceLockConflictError
-        
+        from openviking.resource.resource_lock import ResourceLockConflictError, ResourceLockManager
+
         viking_fs = get_viking_fs()
-        if not hasattr(viking_fs, 'agfs') or not viking_fs.agfs:
+        if not hasattr(viking_fs, "agfs") or not viking_fs.agfs:
             logger.warning("Cannot acquire path lock: agfs not available")
             return None
-        
+
         lock_manager = ResourceLockManager(viking_fs.agfs)
-        
+
         try:
             lock_info = lock_manager.acquire_lock(
                 resource_uri=resource_uri,
@@ -130,21 +130,21 @@ class SemanticProcessor(DequeueHandlerBase):
         """Release path lock."""
         if not resource_uri or not lock_id:
             return False
-        
+
         from openviking.resource.resource_lock import ResourceLockManager
-        
+
         viking_fs = get_viking_fs()
-        if not hasattr(viking_fs, 'agfs') or not viking_fs.agfs:
+        if not hasattr(viking_fs, "agfs") or not viking_fs.agfs:
             return False
-        
+
         lock_manager = ResourceLockManager(viking_fs.agfs)
         success = lock_manager.release_lock(resource_uri, lock_id)
-        
+
         if success:
             logger.info(f"Released path lock for {resource_uri}, lock_id={lock_id}")
         else:
             logger.warning(f"Failed to release path lock for {resource_uri}, lock_id={lock_id}")
-        
+
         return success
 
     def _detect_file_type(self, file_name: str) -> str:
@@ -186,7 +186,7 @@ class SemanticProcessor(DequeueHandlerBase):
         """Process dequeued SemanticMsg, recursively process all subdirectories."""
         target_lock_id: Optional[str] = None
         source_lock_id: Optional[str] = None
-        
+
         try:
             import json
 
@@ -201,9 +201,7 @@ class SemanticProcessor(DequeueHandlerBase):
             msg = SemanticMsg.from_dict(data)
             self._current_msg = msg
             self._current_ctx = self._ctx_from_semantic_msg(msg)
-            logger.info(
-                f"Processing semantic generation for: {msg})"
-            )
+            logger.info(f"Processing semantic generation for: {msg})")
 
             # Check if target_uri exists, auto-detect incremental update
             is_incremental = False
@@ -243,7 +241,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     "uri": msg.uri,
                     "root_lock_id": source_lock_id,
                     "target_lock_id": target_lock_id,
-                }
+                },
             )
             executor = SemanticDagExecutor(
                 processor=self,
@@ -260,7 +258,7 @@ class SemanticProcessor(DequeueHandlerBase):
             logger.info(f"Completed semantic generation for: {msg.uri}")
             self.report_success()
             return None
-           
+
         except Exception as e:
             logger.error(f"Failed to process semantic message: {e}", exc_info=True)
             self.report_error(str(e), data)
@@ -277,7 +275,7 @@ class SemanticProcessor(DequeueHandlerBase):
         if not self._dag_executor:
             return None
         return self._dag_executor.get_stats()
-        
+
     def _create_sync_diff_callback(
         self,
         root_uri: str,
@@ -300,14 +298,14 @@ class SemanticProcessor(DequeueHandlerBase):
         Returns:
             Async callback function
         """
-        
+
         async def sync_diff_callback() -> None:
-            
+
             try:
                 viking_fs = get_viking_fs()
-                
+
                 root_tree = await self._collect_tree_info(root_uri)
-                
+
                 target_tree = await self._collect_tree_info(target_uri)
                 diff = await self._compute_diff(root_tree, target_tree, root_uri, target_uri)
                 logger.info(
@@ -328,19 +326,16 @@ class SemanticProcessor(DequeueHandlerBase):
                     if target_uri != root_uri:
                         await self._release_path_lock(target_uri, target_lock_id)
                 except Exception as e:
-                    logger.error(
-                        f"[SyncDiff] Error releasing locks: {e}",
-                        exc_info=True
-                    )
-                    
+                    logger.error(f"[SyncDiff] Error releasing locks: {e}", exc_info=True)
+
             except Exception as e:
                 logger.error(
                     f"[SyncDiff] Error in sync_diff_callback: "
                     f"root_uri={root_uri}, target_uri={target_uri}"
                     f"error={e}",
-                    exc_info=True
+                    exc_info=True,
                 )
-        
+
         return sync_diff_callback
 
     async def _collect_tree_info(
@@ -360,7 +355,7 @@ class SemanticProcessor(DequeueHandlerBase):
         result: Dict[str, Tuple[List[str], List[str]]] = {}
         total_dirs = 0
         total_files = 0
-        
+
         async def collect_recursive(current_uri: str, depth: int = 0) -> None:
             nonlocal total_dirs, total_files
             indent = "  " * depth
@@ -369,17 +364,17 @@ class SemanticProcessor(DequeueHandlerBase):
             except Exception as e:
                 logger.warning(f"[SyncDiff]{indent} Failed to list {current_uri}: {e}")
                 return
-            
+
             sub_dirs: List[str] = []
             files: List[str] = []
-            
+
             for entry in entries:
                 name = entry.get("name", "")
                 if not name or name.startswith(".") or name in [".", ".."]:
                     continue
-                
+
                 item_uri = VikingURI(current_uri).join(name).uri
-                
+
                 if entry.get("isDir", False):
                     sub_dirs.append(item_uri)
                     total_dirs += 1
@@ -387,9 +382,9 @@ class SemanticProcessor(DequeueHandlerBase):
                 else:
                     files.append(item_uri)
                     total_files += 1
-            
+
             result[current_uri] = (sub_dirs, files)
-        
+
         await collect_recursive(uri)
         return result
 
@@ -412,17 +407,18 @@ class SemanticProcessor(DequeueHandlerBase):
         Returns:
             DiffResult with added/deleted/updated files and directories
         """
+
         def get_relative_path(uri: str, base_uri: str) -> str:
             if uri.startswith(base_uri):
-                rel = uri[len(base_uri):]
+                rel = uri[len(base_uri) :]
                 return rel.lstrip("/")
             return uri
-        
+
         root_files: Set[str] = set()
         root_dirs: Set[str] = set()
         target_files: Set[str] = set()
         target_dirs: Set[str] = set()
-        
+
         for dir_uri, (sub_dirs, files) in root_tree.items():
             rel_dir = get_relative_path(dir_uri, root_uri)
             if rel_dir:
@@ -431,7 +427,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 root_files.add(get_relative_path(f, root_uri))
             for d in sub_dirs:
                 root_dirs.add(get_relative_path(d, root_uri))
-        
+
         for dir_uri, (sub_dirs, files) in target_tree.items():
             rel_dir = get_relative_path(dir_uri, target_uri)
             if rel_dir:
@@ -440,14 +436,14 @@ class SemanticProcessor(DequeueHandlerBase):
                 target_files.add(get_relative_path(f, target_uri))
             for d in sub_dirs:
                 target_dirs.add(get_relative_path(d, target_uri))
-        
+
         added_files_rel = root_files - target_files
         deleted_files_rel = target_files - root_files
         common_files = root_files & target_files
-        
+
         added_dirs_rel = root_dirs - target_dirs
         deleted_dirs_rel = target_dirs - root_dirs
-        
+
         updated_files: List[str] = []
         for rel_file in common_files:
             root_file = f"{root_uri}/{rel_file}"
@@ -460,12 +456,12 @@ class SemanticProcessor(DequeueHandlerBase):
                     f"[SyncDiff] Failed to compare file content for {rel_file}: {e}, "
                     f"treating as unchanged"
                 )
-        
+
         added_files = [f"{root_uri}/{f}" for f in added_files_rel]
         deleted_files = [f"{target_uri}/{f}" for f in deleted_files_rel]
         added_dirs = [f"{root_uri}/{d}" for d in added_dirs_rel]
         deleted_dirs = [f"{target_uri}/{d}" for d in deleted_dirs_rel]
-        
+
         result = DiffResult(
             added_files=added_files,
             deleted_files=deleted_files,
@@ -473,7 +469,7 @@ class SemanticProcessor(DequeueHandlerBase):
             added_dirs=added_dirs,
             deleted_dirs=deleted_dirs,
         )
-        
+
         return result
 
     async def _execute_sync_operations(
@@ -496,17 +492,17 @@ class SemanticProcessor(DequeueHandlerBase):
             target_uri: Target directory URI
         """
         viking_fs = get_viking_fs()
-        
+
         def map_to_target(root_item_uri: str) -> str:
             if root_item_uri.startswith(root_uri):
-                rel = root_item_uri[len(root_uri):]
+                rel = root_item_uri[len(root_uri) :]
                 return f"{target_uri}{rel}" if rel else target_uri
             return root_item_uri
-        
+
         total_deleted = 0
         total_moved = 0
         total_failed = 0
-        
+
         for i, deleted_file in enumerate(diff.deleted_files, 1):
             try:
                 await viking_fs.rm(deleted_file, ctx=self._current_ctx)
@@ -525,7 +521,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 logger.warning(
                     f"[SyncDiff] Failed to remove old file [{i}/{len(diff.updated_files)}]: {target_file}, error={e}"
                 )
-        
+
         files_to_move = diff.added_files + diff.updated_files
         for i, root_file in enumerate(files_to_move, 1):
             target_file = map_to_target(root_file)
@@ -533,9 +529,13 @@ class SemanticProcessor(DequeueHandlerBase):
                 target_parent = VikingURI(target_file).parent
                 if target_parent:
                     try:
-                        await viking_fs.mkdir(target_parent.uri, exist_ok=True, ctx=self._current_ctx)
+                        await viking_fs.mkdir(
+                            target_parent.uri, exist_ok=True, ctx=self._current_ctx
+                        )
                     except Exception as mkdir_error:
-                        logger.debug(f"[SyncDiff] Parent dir creation skipped (may already exist): {mkdir_error}")
+                        logger.debug(
+                            f"[SyncDiff] Parent dir creation skipped (may already exist): {mkdir_error}"
+                        )
                 await viking_fs.mv(root_file, target_file, ctx=self._current_ctx)
                 total_moved += 1
             except Exception as e:
@@ -544,7 +544,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     f"[SyncDiff] Failed to move file [{i}/{len(files_to_move)}]: "
                     f"{root_file} -> {target_file}, error={e}"
                 )
-        
+
         for i, deleted_dir in enumerate(
             sorted(diff.deleted_dirs, key=lambda x: x.count("/"), reverse=True), 1
         ):
@@ -784,13 +784,12 @@ class SemanticProcessor(DequeueHandlerBase):
             return
 
         from openviking.utils.embedding_utils import vectorize_directory_meta
+
         tracker = EmbeddingTaskTracker.get_instance()
         await tracker.increment(
             semantic_msg_id=semantic_msg_id,
         )
-        await tracker.increment(
-            semantic_msg_id=semantic_msg_id
-        )
+        await tracker.increment(semantic_msg_id=semantic_msg_id)
 
         active_ctx = ctx or self._current_ctx
         await vectorize_directory_meta(
@@ -813,6 +812,7 @@ class SemanticProcessor(DequeueHandlerBase):
     ) -> None:
         """Vectorize a single file using its content or summary."""
         from openviking.utils.embedding_utils import vectorize_file
+
         tracker = EmbeddingTaskTracker.get_instance()
         await tracker.increment(
             semantic_msg_id=semantic_msg_id,

@@ -3,9 +3,9 @@
 """Resource management modules for incremental updates."""
 
 from openviking.resource.resource_lock import (
-    ResourceLockManager,
     ResourceLockConflictError,
     ResourceLockError,
+    ResourceLockManager,
 )
 
 __all__ = [

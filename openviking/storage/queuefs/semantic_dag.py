@@ -70,7 +70,7 @@ class SemanticDagExecutor:
         self._stats = DagStats()
 
     async def run(self, root_uri: str) -> None:
-        """Run DAG execution starting from root_uri."""      
+        """Run DAG execution starting from root_uri."""
         self._root_uri = root_uri
         self._root_done = asyncio.Event()
         await self._dispatch_dir(root_uri, parent_uri=None)
@@ -155,10 +155,12 @@ class SemanticDagExecutor:
 
     def _get_target_file_path(self, current_uri: str) -> Optional[str]:
         if not self._incremental_update or not self._target_uri or not self._root_uri:
-            logger.warning(f"Invalid target_uri or root_uri for incremental update: target_uri={self._target_uri}, root_uri={self._root_uri}")
+            logger.warning(
+                f"Invalid target_uri or root_uri for incremental update: target_uri={self._target_uri}, root_uri={self._root_uri}"
+            )
             return None
         try:
-            relative_path = current_uri[len(self._root_uri):]
+            relative_path = current_uri[len(self._root_uri) :]
             if relative_path.startswith("/"):
                 relative_path = relative_path[1:]
             return f"{self._target_uri}/{relative_path}" if relative_path else self._target_uri
@@ -199,7 +201,9 @@ class SemanticDagExecutor:
             pass
         return None
 
-    async def _check_dir_children_changed(self, dir_uri: str, current_files: List[str], current_dirs: List[str]) -> bool:
+    async def _check_dir_children_changed(
+        self, dir_uri: str, current_files: List[str], current_dirs: List[str]
+    ) -> bool:
         target_path = self._get_target_file_path(dir_uri)
         if not target_path:
             return True
@@ -220,7 +224,9 @@ class SemanticDagExecutor:
         except Exception:
             return True
 
-    async def _read_existing_overview_abstract(self, dir_uri: str) -> tuple[Optional[str], Optional[str]]:
+    async def _read_existing_overview_abstract(
+        self, dir_uri: str
+    ) -> tuple[Optional[str], Optional[str]]:
         target_path = self._get_target_file_path(dir_uri)
         if not target_path:
             return None, None
@@ -372,7 +378,11 @@ class SemanticDagExecutor:
             try:
                 if need_vectorize:
                     await self._processor._vectorize_directory(
-                        dir_uri, self._context_type, abstract, overview, ctx=self._ctx,
+                        dir_uri,
+                        self._context_type,
+                        abstract,
+                        overview,
+                        ctx=self._ctx,
                         semantic_msg_id=self._semantic_msg_id,
                     )
             except Exception as e:

@@ -266,6 +266,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
         finally:
             if embedding_msg and embedding_msg.semantic_msg_id:
                 from openviking.storage.queuefs.embedding_tracker import EmbeddingTaskTracker
+
                 tracker = EmbeddingTaskTracker.get_instance()
                 try:
                     await tracker.decrement(embedding_msg.semantic_msg_id)

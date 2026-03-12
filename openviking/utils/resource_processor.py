@@ -205,7 +205,7 @@ class ResourceProcessor:
                     resource_uris=[result["root_uri"]],
                     ctx=ctx,
                     skip_vectorization=skip_vec,
-                    temp_uris = [temp_uri_for_summarize]
+                    temp_uris=[temp_uri_for_summarize],
                     **kwargs,
                 )
             except Exception as e:
@@ -217,7 +217,11 @@ class ResourceProcessor:
             # We assume this means "Ingest and Index", which requires summarization.
             try:
                 await self._get_summarizer().summarize(
-                    resource_uris=[result["root_uri"]], ctx=ctx, skip_vectorization=False,temp_uris = [temp_uri_for_summarize], **kwargs
+                    resource_uris=[result["root_uri"]],
+                    ctx=ctx,
+                    skip_vectorization=False,
+                    temp_uris=[temp_uri_for_summarize],
+                    **kwargs,
                 )
             except Exception as e:
                 logger.error(f"Auto-index failed: {e}")
