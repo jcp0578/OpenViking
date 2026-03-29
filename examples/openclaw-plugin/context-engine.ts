@@ -722,7 +722,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         }
       }
 
-      const tokensBefore = tokensBeforeOriginal ?? preCommitEstimatedTokens ?? 0;
+      const tokensBefore = tokensBeforeOriginal ?? preCommitEstimatedTokens ?? -1;
 
       try {
         logger.info(
@@ -816,7 +816,7 @@ export function createMemoryOpenVikingContextEngine(params: {
             result: {
               summary: "",
               tokensBefore: tokensBefore,
-              tokensAfter: tokensBefore,
+              tokensAfter: tokensBefore >= 0 ? tokensBefore : undefined,
               details: {
                 commit: commitResult,
               },
