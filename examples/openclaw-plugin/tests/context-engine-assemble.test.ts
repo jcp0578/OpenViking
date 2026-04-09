@@ -10,6 +10,7 @@ const cfg = memoryOpenVikingConfigSchema.parse({
   autoCapture: false,
   autoRecall: false,
   ingestReplyAssist: false,
+  emitStandardDiagnostics: true,
 });
 
 function roughEstimate(messages: unknown[]): number {
@@ -142,6 +143,52 @@ describe("context-engine assemble()", () => {
         isError: false,
       },
     ]);
+  });
+
+  it("records senderId from runtimeContext in assemble diagnostics", async () => {
+    const { engine, logger } = makeEngine({
+      latest_archive_overview: "",
+      pre_archive_abstracts: [],
+      messages: [],
+      estimatedTokens: 0,
+      stats: makeStats(),
+    });
+
+    await engine.assemble({
+      sessionId: "session-with-sender",
+      messages: [{ role: "user", content: "hello" }],
+      runtimeContext: { senderId: "telegram:12345" },
+    });
+
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("\"senderIdFound\":true"),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("\"senderId\":\"telegram:12345\""),
+    );
+  });
+
+  it("treats blank runtimeContext.senderId as missing in assemble diagnostics", async () => {
+    const { engine, logger } = makeEngine({
+      latest_archive_overview: "",
+      pre_archive_abstracts: [],
+      messages: [],
+      estimatedTokens: 0,
+      stats: makeStats(),
+    });
+
+    await engine.assemble({
+      sessionId: "session-blank-sender",
+      messages: [{ role: "user", content: "hello" }],
+      runtimeContext: { senderId: "   " },
+    });
+
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("\"senderIdFound\":false"),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("\"senderId\":null"),
+    );
   });
 
   it("emits a non-error toolResult for a running tool (not a synthetic error)", async () => {

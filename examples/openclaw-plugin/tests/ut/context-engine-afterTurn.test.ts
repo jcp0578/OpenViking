@@ -204,6 +204,48 @@ describe("context-engine afterTurn()", () => {
     expect(storedContent).toContain("hi there");
   });
 
+  it("records senderId from runtimeContext in afterTurn diagnostics", async () => {
+    const { engine, logger } = makeEngine({
+      commitTokenThreshold: 50,
+      getSession: { pending_tokens: 5000 },
+    });
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages: [{ role: "user", content: "hello world" }],
+      prePromptMessageCount: 0,
+      runtimeContext: { senderId: "telegram:12345" },
+    });
+
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("\"senderIdFound\":true"),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("\"senderId\":\"telegram:12345\""),
+    );
+  });
+
+  it("treats blank runtimeContext.senderId as missing in afterTurn diagnostics", async () => {
+    const { engine, client, logger } = makeEngine();
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages: [{ role: "user", content: "hello world" }],
+      prePromptMessageCount: 0,
+      runtimeContext: { senderId: "   " },
+    });
+
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(1);
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("\"senderIdFound\":false"),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("\"senderId\":null"),
+    );
+  });
+
   it("passes the latest non-system message timestamp to addSessionMessage as ISO string", async () => {
     const { engine, client } = makeEngine();
 
@@ -308,11 +350,15 @@ describe("context-engine afterTurn()", () => {
         sessionFile: "",
         messages,
         prePromptMessageCount: 0,
+        runtimeContext: { senderId: "telegram:12345" },
       }),
     ).resolves.toBeUndefined();
 
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("afterTurn failed"),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("\"senderId\":\"telegram:12345\""),
     );
   });
 
