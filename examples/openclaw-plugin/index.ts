@@ -721,6 +721,8 @@ const contextEnginePlugin = {
       const lines = [
         `Found ${result.total ?? 0} OpenViking results for "${query}"${scope}`,
         "",
+        ...formatSearchBucket("Memories", result.memories ?? []),
+        "",
         ...formatSearchBucket("Resources", result.resources ?? []),
         "",
         ...formatSearchBucket("Skills", result.skills ?? []),

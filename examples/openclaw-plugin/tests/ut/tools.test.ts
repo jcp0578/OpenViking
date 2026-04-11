@@ -368,6 +368,45 @@ describe("Tool: ov_search (behavioral)", () => {
     expect(result.details.skills).toHaveLength(0);
     expect(result.content[0]!.text).toContain("Resources");
   });
+
+  it("renders memory hits when explicit uri returns memories", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/v1/search/find")) {
+        return okResponse({
+          memories: [
+            {
+              context_type: "memory",
+              uri: "viking://user/default/memories/preferences/theme.md",
+              level: 2,
+              score: 0.91,
+              category: "preferences",
+              match_reason: "",
+              relations: [],
+              abstract: "User prefers dark theme",
+              overview: null,
+            },
+          ],
+          resources: [],
+          skills: [],
+          total: 1,
+        });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { tools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const search = tools.get("ov_search")!;
+    const result = await search.execute("tc1", {
+      query: "theme",
+      uri: "viking://user/default/memories",
+    }) as ToolResult;
+
+    expect(result.details.memories).toHaveLength(1);
+    expect(result.content[0]!.text).toContain("Memories");
+    expect(result.content[0]!.text).toContain("User prefers dark theme");
+  });
 });
 
 describe("OpenViking import command parsing", () => {
