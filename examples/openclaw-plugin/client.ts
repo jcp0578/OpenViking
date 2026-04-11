@@ -1,5 +1,10 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { spawn } from "node:child_process";
+import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, join, relative } from "node:path";
+
+import { zipSync } from "fflate";
 
 export type FindResultItem = {
   uri: string;
@@ -106,6 +111,47 @@ export type SessionArchiveResult = {
   messages: OVMessage[];
 };
 
+export type AddResourceInput = {
+  pathOrUrl: string;
+  to?: string;
+  parent?: string;
+  reason?: string;
+  instruction?: string;
+  wait?: boolean;
+  timeout?: number;
+  strict?: boolean;
+  ignoreDirs?: string;
+  include?: string;
+  exclude?: string;
+  preserveStructure?: boolean;
+};
+
+export type AddResourceResult = {
+  status?: string;
+  root_uri?: string;
+  temp_uri?: string;
+  source_path?: string;
+  warnings?: string[];
+  errors?: string[];
+  queue_status?: unknown;
+  meta?: unknown;
+};
+
+export type AddSkillInput = {
+  path?: string;
+  data?: unknown;
+  wait?: boolean;
+  timeout?: number;
+};
+
+export type AddSkillResult = {
+  status?: string;
+  uri?: string;
+  name?: string;
+  auxiliary_files?: number;
+  queue_status?: unknown;
+};
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -123,6 +169,7 @@ const MEMORY_URI_PATTERNS = [
 ];
 const USER_STRUCTURE_DIRS = new Set(["memories"]);
 const AGENT_STRUCTURE_DIRS = new Set(["memories", "skills", "instructions", "workspaces"]);
+const REMOTE_RESOURCE_PREFIXES = ["http://", "https://", "git@", "ssh://", "git://"];
 
 function md5Short(input: string): string {
   return createHash("md5").update(input).digest("hex").slice(0, 12);
@@ -130,6 +177,18 @@ function md5Short(input: string): string {
 
 export function isMemoryUri(uri: string): boolean {
   return MEMORY_URI_PATTERNS.some((pattern) => pattern.test(uri));
+}
+
+function isRemoteResourceSource(source: string): boolean {
+  return REMOTE_RESOURCE_PREFIXES.some((prefix) => source.startsWith(prefix));
+}
+
+function toUploadBytes(value: Buffer): Uint8Array {
+  return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+}
+
+function toBlobPart(value: Buffer): ArrayBuffer {
+  return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength) as ArrayBuffer;
 }
 
 export class OpenVikingClient {
@@ -191,7 +250,7 @@ export class OpenVikingClient {
       if (effectiveAgentId) {
         headers.set("X-OpenViking-Agent", effectiveAgentId);
       }
-      if (init.body && !headers.has("Content-Type")) {
+      if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
         headers.set("Content-Type", "application/json");
       }
 
@@ -373,6 +432,151 @@ export class OpenVikingClient {
       {},
       agentId,
     );
+  }
+
+  async uploadTempFile(filePath: string, agentId?: string): Promise<string> {
+    const fileBytes = await readFile(filePath);
+    const form = new FormData();
+    form.append(
+      "file",
+      new Blob([toBlobPart(fileBytes)], { type: "application/octet-stream" }),
+      basename(filePath),
+    );
+    const result = await this.request<{ temp_file_id: string }>(
+      "/api/v1/resources/temp_upload",
+      { method: "POST", body: form },
+      agentId,
+    );
+    if (!result.temp_file_id) {
+      throw new Error("OpenViking temp upload did not return temp_file_id");
+    }
+    return result.temp_file_id;
+  }
+
+  async zipDirectoryForUpload(dirPath: string): Promise<string> {
+    const rootStats = await stat(dirPath);
+    if (!rootStats.isDirectory()) {
+      throw new Error(`Not a directory: ${dirPath}`);
+    }
+
+    const files: Record<string, Uint8Array> = {};
+    const walk = async (currentDir: string) => {
+      const entries = await readdir(currentDir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = join(currentDir, entry.name);
+        if (entry.isDirectory()) {
+          await walk(fullPath);
+          continue;
+        }
+        if (!entry.isFile()) {
+          continue;
+        }
+        const relPath = relative(dirPath, fullPath).replace(/\\/g, "/");
+        if (!relPath || relPath.startsWith("../") || relPath.includes("/../")) {
+          throw new Error(`Unsafe relative path while zipping: ${relPath}`);
+        }
+        files[relPath] = toUploadBytes(await readFile(fullPath));
+      }
+    };
+    await walk(dirPath);
+
+    const zipDir = join(tmpdir(), "openviking-openclaw-upload");
+    await mkdir(zipDir, { recursive: true });
+    const zipPath = join(zipDir, `${basename(dirPath).replace(/[^a-zA-Z0-9._-]/g, "_")}-${randomUUID()}.zip`);
+    await writeFile(zipPath, zipSync(files));
+    return zipPath;
+  }
+
+  async addResource(input: AddResourceInput, agentId?: string): Promise<AddResourceResult> {
+    const pathOrUrl = input.pathOrUrl.trim();
+    if (!pathOrUrl) {
+      throw new Error("pathOrUrl is required");
+    }
+    if (input.to && input.parent) {
+      throw new Error("Cannot specify both 'to' and 'parent'.");
+    }
+
+    const body: Record<string, unknown> = {
+      to: input.to,
+      parent: input.parent,
+      reason: input.reason ?? "",
+      instruction: input.instruction ?? "",
+      wait: input.wait ?? false,
+      timeout: input.timeout,
+      strict: input.strict ?? false,
+      ignore_dirs: input.ignoreDirs,
+      include: input.include,
+      exclude: input.exclude,
+    };
+    if (typeof input.preserveStructure === "boolean") {
+      body.preserve_structure = input.preserveStructure;
+    }
+
+    let cleanupPath: string | undefined;
+    try {
+      if (isRemoteResourceSource(pathOrUrl)) {
+        body.path = pathOrUrl;
+      } else {
+        const localStats = await stat(pathOrUrl);
+        let uploadPath = pathOrUrl;
+        if (localStats.isDirectory()) {
+          uploadPath = await this.zipDirectoryForUpload(pathOrUrl);
+          cleanupPath = uploadPath;
+          body.source_name = basename(pathOrUrl);
+        } else if (!localStats.isFile()) {
+          throw new Error(`Path is not a file or directory: ${pathOrUrl}`);
+        }
+        body.temp_file_id = await this.uploadTempFile(uploadPath, agentId);
+      }
+      return this.request<AddResourceResult>(
+        "/api/v1/resources",
+        { method: "POST", body: JSON.stringify(body) },
+        agentId,
+      );
+    } finally {
+      if (cleanupPath) {
+        await rm(cleanupPath, { force: true }).catch(() => undefined);
+      }
+    }
+  }
+
+  async addSkill(input: AddSkillInput, agentId?: string): Promise<AddSkillResult> {
+    const hasPath = typeof input.path === "string" && input.path.trim().length > 0;
+    const hasData = input.data !== undefined && input.data !== null;
+    if (hasPath === hasData) {
+      throw new Error("Provide exactly one of 'path' or 'data' for skill import.");
+    }
+
+    const body: Record<string, unknown> = {
+      wait: input.wait ?? false,
+      timeout: input.timeout,
+    };
+    let cleanupPath: string | undefined;
+    try {
+      if (hasPath) {
+        const skillPath = input.path!.trim();
+        const localStats = await stat(skillPath);
+        let uploadPath = skillPath;
+        if (localStats.isDirectory()) {
+          uploadPath = await this.zipDirectoryForUpload(skillPath);
+          cleanupPath = uploadPath;
+        } else if (!localStats.isFile()) {
+          throw new Error(`Path is not a file or directory: ${skillPath}`);
+        }
+        body.temp_file_id = await this.uploadTempFile(uploadPath, agentId);
+      } else {
+        body.data = input.data;
+      }
+      return this.request<AddSkillResult>(
+        "/api/v1/skills",
+        { method: "POST", body: JSON.stringify(body) },
+        agentId,
+      );
+    } finally {
+      if (cleanupPath) {
+        await rm(cleanupPath, { force: true }).catch(() => undefined);
+      }
+    }
   }
 
   async addSessionMessage(
