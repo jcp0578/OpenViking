@@ -322,6 +322,52 @@ describe("Tool: ov_search (behavioral)", () => {
     expect(findBodies.some((body) => body.target_uri === "viking://resources")).toBe(true);
     expect(findBodies.some((body) => String(body.target_uri).startsWith("viking://agent/") && String(body.target_uri).endsWith("/skills"))).toBe(true);
   });
+
+  it("returns partial results when one default scope search fails", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "default" });
+      }
+      if (url.includes("/api/v1/fs/ls")) {
+        return okResponse([]);
+      }
+      if (url.endsWith("/api/v1/search/find")) {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        if (body.target_uri === "viking://resources") {
+          return okResponse({
+            memories: [],
+            resources: [
+              {
+                context_type: "resource",
+                uri: "viking://resources/openviking-readme/README.md",
+                level: 2,
+                score: 0.82,
+                category: "",
+                match_reason: "",
+                relations: [],
+                abstract: "OpenViking install guide",
+                overview: null,
+              },
+            ],
+            skills: [],
+            total: 1,
+          });
+        }
+        throw new Error("skills search unavailable");
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { tools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const search = tools.get("ov_search")!;
+    const result = await search.execute("tc1", { query: "OpenViking install" }) as ToolResult;
+
+    expect(result.details.resources).toHaveLength(1);
+    expect(result.details.skills).toHaveLength(0);
+    expect(result.content[0]!.text).toContain("Resources");
+  });
 });
 
 describe("OpenViking import command parsing", () => {
@@ -377,6 +423,13 @@ describe("OpenViking search command parsing", () => {
       query: "OpenViking install",
       uri: "viking://resources",
       limit: 3,
+    });
+  });
+
+  it("keeps multi-word unquoted slash-command queries intact", () => {
+    expect(parseOvSearchCommandArgs(`OpenViking install --uri viking://resources`)).toMatchObject({
+      query: "OpenViking install",
+      uri: "viking://resources",
     });
   });
 });

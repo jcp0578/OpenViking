@@ -351,7 +351,7 @@ export function parseOvImportCommandArgs(args: string): OvImportInput {
 
 export function parseOvSearchCommandArgs(args: string): OvSearchInput {
   const parsed = parseFlagArgs(args);
-  const query = parsed.positionals[0];
+  const query = parsed.positionals.join(" ").trim();
   if (!query) {
     throw new Error('Usage: /ov-search "<query>" [--uri URI] [--limit N]');
   }
@@ -732,12 +732,30 @@ const contextEnginePlugin = {
       }
       const limit = Math.max(1, Math.floor(input.limit ?? 10));
       const client = await getClient();
-      const result = input.uri
-        ? await client.find(query, { targetUri: input.uri, limit }, agentId)
-        : mergeFindResults(await Promise.all([
-            client.find(query, { targetUri: "viking://resources", limit }, agentId),
-            client.find(query, { targetUri: "viking://agent/skills", limit }, agentId),
-          ]));
+      let result: FindResult;
+      if (input.uri) {
+        result = await client.find(query, { targetUri: input.uri, limit }, agentId);
+      } else {
+        const [resourcesSettled, skillsSettled] = await Promise.allSettled([
+          client.find(query, { targetUri: "viking://resources", limit }, agentId),
+          client.find(query, { targetUri: "viking://agent/skills", limit }, agentId),
+        ]);
+        const successful = [
+          resourcesSettled.status === "fulfilled" ? resourcesSettled.value : null,
+          skillsSettled.status === "fulfilled" ? skillsSettled.value : null,
+        ].filter((value): value is FindResult => value !== null);
+        if (successful.length === 0) {
+          const firstError = resourcesSettled.status === "rejected" ? resourcesSettled.reason : skillsSettled.reason;
+          throw firstError instanceof Error ? firstError : new Error(String(firstError));
+        }
+        if (resourcesSettled.status === "rejected") {
+          api.logger.warn?.(`openviking: resource search failed: ${String(resourcesSettled.reason)}`);
+        }
+        if (skillsSettled.status === "rejected") {
+          api.logger.warn?.(`openviking: skill search failed: ${String(skillsSettled.reason)}`);
+        }
+        result = mergeFindResults(successful);
+      }
       return {
         content: [{ type: "text" as const, text: formatSearchText(query, input.uri, result) }],
         details: {
