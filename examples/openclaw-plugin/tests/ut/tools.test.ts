@@ -395,6 +395,18 @@ describe("OpenViking import command parsing", () => {
     });
   });
 
+  it("keeps unquoted space-containing import sources intact", () => {
+    expect(
+      parseOvImportCommandArgs(
+        `My Docs/README.md --to viking://resources/readme`,
+      ),
+    ).toMatchObject({
+      kind: "resource",
+      source: "My Docs/README.md",
+      to: "viking://resources/readme",
+    });
+  });
+
   it("rejects resource import with both to and parent", () => {
     expect(() =>
       parseOvImportCommandArgs("./README.md --to viking://resources/a --parent viking://resources"),

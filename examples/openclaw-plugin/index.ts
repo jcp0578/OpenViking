@@ -325,7 +325,8 @@ function parseImportKind(value: string | undefined): OvImportKind {
 export function parseOvImportCommandArgs(args: string): OvImportInput {
   const parsed = parseFlagArgs(args);
   const kind = parseImportKind(getStringFlag(parsed.flags, "kind"));
-  const source = parsed.positionals[0];
+  const source =
+    parsed.positionals.length <= 1 ? parsed.positionals[0] : parsed.positionals.join(" ").trim();
   if (!source) {
     throw new Error("Usage: /ov-import <source> [--kind resource|skill] [--to URI] [--parent URI] [--wait]");
   }
@@ -351,6 +352,8 @@ export function parseOvImportCommandArgs(args: string): OvImportInput {
 
 export function parseOvSearchCommandArgs(args: string): OvSearchInput {
   const parsed = parseFlagArgs(args);
+  // `/ov-search` only accepts a single query string, so positional segments are
+  // always re-joined to preserve unquoted multi-word searches.
   const query = parsed.positionals.join(" ").trim();
   if (!query) {
     throw new Error('Usage: /ov-search "<query>" [--uri URI] [--limit N]');
