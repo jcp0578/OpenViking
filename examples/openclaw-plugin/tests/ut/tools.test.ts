@@ -311,8 +311,10 @@ describe("Tool: ov_search (behavioral)", () => {
     const search = tools.get("ov_search")!;
     const result = await search.execute("tc1", { query: "OpenViking install" }) as ToolResult;
 
-    expect(result.content[0]!.text).toContain("Resources");
-    expect(result.content[0]!.text).toContain("Skills");
+    expect(result.content[0]!.text).toContain("no");
+    expect(result.content[0]!.text).toContain("type");
+    expect(result.content[0]!.text).toContain("resource");
+    expect(result.content[0]!.text).toContain("skill");
     expect(result.details.resources).toHaveLength(1);
     expect(result.details.skills).toHaveLength(1);
 
@@ -366,7 +368,7 @@ describe("Tool: ov_search (behavioral)", () => {
 
     expect(result.details.resources).toHaveLength(1);
     expect(result.details.skills).toHaveLength(0);
-    expect(result.content[0]!.text).toContain("Resources");
+    expect(result.content[0]!.text).toContain("resource");
   });
 
   it("renders memory hits when explicit uri returns memories", async () => {
@@ -404,7 +406,7 @@ describe("Tool: ov_search (behavioral)", () => {
     }) as ToolResult;
 
     expect(result.details.memories).toHaveLength(1);
-    expect(result.content[0]!.text).toContain("Memories");
+    expect(result.content[0]!.text).toContain("memory");
     expect(result.content[0]!.text).toContain("User prefers dark theme");
   });
 });

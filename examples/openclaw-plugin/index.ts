@@ -698,19 +698,43 @@ const contextEnginePlugin = {
       };
     };
 
-    const formatSearchBucket = (title: string, items: FindResultItem[]): string[] => {
+    const formatSearchRows = (result: FindResult): string[] => {
+      const truncateSummary = (value: string, maxChars = 220): string => {
+        const collapsed = value.replace(/\s+/g, " ").trim();
+        if (collapsed.length <= maxChars) {
+          return collapsed;
+        }
+        return `${collapsed.slice(0, maxChars - 3)}...`;
+      };
+      const truncateUri = (value: string, maxChars = 84): string => {
+        if (value.length <= maxChars) {
+          return value;
+        }
+        return `${value.slice(0, maxChars - 3)}...`;
+      };
+      const items = [
+        ...(result.memories ?? []).map((item) => ({ contextType: "memory", item })),
+        ...(result.resources ?? []).map((item) => ({ contextType: "resource", item })),
+        ...(result.skills ?? []).map((item) => ({ contextType: "skill", item })),
+      ];
       if (items.length === 0) {
         return [];
       }
+      const numberHeader = "no";
+      const numberWidth = Math.max(numberHeader.length, String(items.length).length);
+      const typeWidth = Math.max("type".length, ...items.map(({ contextType }) => contextType.length));
+      const uriWidth = Math.max("uri".length, ...items.map(({ item }) => truncateUri(item.uri).length));
+      const levelWidth = Math.max("level".length, ...items.map(({ item }) => String(item.level ?? "").length));
+      const scoreWidth = Math.max(
+        "score".length,
+        ...items.map(({ item }) => (typeof item.score === "number" ? item.score.toFixed(2).length : 0)),
+      );
       return [
-        title,
-        ...items.map((item, index) => {
-          const score = typeof item.score === "number" ? `\n   score: ${item.score.toFixed(2)}` : "";
-          const summary = (item.abstract || item.overview || "(no summary)")
-            .split("\n")
-            .map((line) => `   ${line}`)
-            .join("\n");
-          return `${index + 1}. ${item.uri}\n${summary}${score}`;
+        `${numberHeader.padEnd(numberWidth)}  ${"type".padEnd(typeWidth)}  ${"uri".padEnd(uriWidth)}  ${"level".padEnd(levelWidth)}  ${"score".padEnd(scoreWidth)}  abstract`,
+        ...items.map(({ contextType, item }, index) => {
+          const score = typeof item.score === "number" ? item.score.toFixed(2) : "";
+          const summary = truncateSummary(item.abstract || item.overview || "(no summary)");
+          return `${String(index + 1).padEnd(numberWidth)}  ${contextType.padEnd(typeWidth)}  ${truncateUri(item.uri).padEnd(uriWidth)}  ${String(item.level ?? "").padEnd(levelWidth)}  ${score.padEnd(scoreWidth)}  ${summary}`;
         }),
       ];
     };
@@ -724,11 +748,7 @@ const contextEnginePlugin = {
       const lines = [
         `Found ${result.total ?? 0} OpenViking results for "${query}"${scope}`,
         "",
-        ...formatSearchBucket("Memories", result.memories ?? []),
-        "",
-        ...formatSearchBucket("Resources", result.resources ?? []),
-        "",
-        ...formatSearchBucket("Skills", result.skills ?? []),
+        ...formatSearchRows(result),
       ].filter((line, index, all) => line || (all[index - 1] && all[index + 1]));
       return lines.join("\n");
     };
