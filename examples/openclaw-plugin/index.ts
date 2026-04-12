@@ -98,6 +98,10 @@ type ToolContext = {
 type PluginCommandContext = {
   args?: string;
   commandBody: string;
+  sessionKey?: string;
+  sessionId?: string;
+  agentId?: string;
+  ovSessionId?: string;
 };
 
 type CommandResult = {
@@ -878,8 +882,10 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
       acceptsArgs: true,
       handler: async (ctx: PluginCommandContext) => {
         try {
+          rememberSessionAgentId(ctx);
+          const agentId = resolveAgentId(ctx.sessionId, ctx.sessionKey, ctx.ovSessionId);
           const input = parseOvImportCommandArgs(ctx.args ?? "");
-          const result = await executeImport(input);
+          const result = await executeImport(input, agentId);
           return { text: result.content[0]!.text, details: result.details };
         } catch (err) {
           return { text: `OpenViking import failed: ${err instanceof Error ? err.message : String(err)}` };
@@ -893,8 +899,10 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
       acceptsArgs: true,
       handler: async (ctx: PluginCommandContext) => {
         try {
+          rememberSessionAgentId(ctx);
+          const agentId = resolveAgentId(ctx.sessionId, ctx.sessionKey, ctx.ovSessionId);
           const input = parseOvSearchCommandArgs(ctx.args ?? "");
-          const result = await searchOpenViking(input);
+          const result = await searchOpenViking(input, agentId);
           return { text: result.content[0]!.text, details: result.details };
         } catch (err) {
           return { text: `OpenViking search failed: ${err instanceof Error ? err.message : String(err)}` };

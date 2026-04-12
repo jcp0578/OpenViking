@@ -18,7 +18,14 @@ type CommandDef = {
   name: string;
   description: string;
   acceptsArgs?: boolean;
-  handler: (ctx: { args?: string; commandBody: string }) => Promise<{ text: string }>;
+  handler: (ctx: {
+    args?: string;
+    commandBody: string;
+    sessionKey?: string;
+    sessionId?: string;
+    agentId?: string;
+    ovSessionId?: string;
+  }) => Promise<{ text: string }>;
 };
 
 type ToolResult = {
@@ -520,6 +527,31 @@ describe("Plugin registration", () => {
     });
     expect(resource.text).toContain("Usage: /ov-import");
     expect(search.text).toContain("Usage: /ov-search");
+  });
+
+  it("search command propagates agent identity when command ctx includes it", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/v1/search/find")) {
+        return okResponse({ memories: [], resources: [], skills: [], total: 0 });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { commands, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+
+    await commands.get("ov-search")!.handler({
+      args: "test query --uri viking://resources",
+      commandBody: "/ov-search",
+      agentId: "worker",
+      sessionId: "session-1",
+      sessionKey: "agent:worker:session-1",
+    });
+
+    const [, init] = fetchMock.mock.calls.find((call) => String(call[0]).endsWith("/api/v1/search/find")) as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.get("X-OpenViking-Agent")).toBe("worker");
   });
 
   it("registers service with id 'openviking'", () => {
