@@ -684,15 +684,22 @@ const contextEnginePlugin = {
       }, agentId);
     };
 
-    const mergeFindResults = (results: FindResult[]): FindResult => {
-      const byUri = (items: FindResultItem[]) =>
-        items.filter((item, index, self) => index === self.findIndex((candidate) => candidate.uri === item.uri));
-      const memories = byUri(results.flatMap((result) => result.memories ?? []));
-      const resources = byUri(results.flatMap((result) => result.resources ?? []));
-      const skills = byUri(results.flatMap((result) => result.skills ?? []));
-      return {
-        memories,
-        resources,
+const mergeFindResults = (results: FindResult[]): FindResult => {
+  const deduplicate = (items: FindResultItem[]): FindResultItem[] => {
+    const seen = new Map<string, FindResultItem>();
+    for (const item of items) {
+      if (!seen.has(item.uri)) {
+        seen.set(item.uri, item);
+      }
+    }
+    return Array.from(seen.values());
+  };
+  const memories = deduplicate(results.flatMap((result) => result.memories ?? []));
+  const resources = deduplicate(results.flatMap((result) => result.resources ?? []));
+  const skills = deduplicate(results.flatMap((result) => result.skills ?? []));
+  return {
+    memories,
+    resources,
         skills,
         total: memories.length + resources.length + skills.length,
       };

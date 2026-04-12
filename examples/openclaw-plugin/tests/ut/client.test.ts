@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -125,6 +125,8 @@ describe("OpenVikingClient resource and skill import", () => {
   it("addResource zips local directory before upload", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "ov-client-test-"));
     const dirPath = join(tempDir, "resource-dir");
+    const uploadPrefix = "openviking-openclaw-upload-";
+    const beforeDirs = (await readdir(tmpdir())).filter((name) => name.startsWith(uploadPrefix));
     await mkdir(dirPath, { recursive: true });
     await writeFile(join(dirPath, "README.md"), "# Demo\n");
     const fetchMock = vi
@@ -142,6 +144,8 @@ describe("OpenVikingClient resource and skill import", () => {
       temp_file_id: "upload_resource.zip",
       source_name: "resource-dir",
     });
+    const afterDirs = (await readdir(tmpdir())).filter((name) => name.startsWith(uploadPrefix));
+    expect(afterDirs).toEqual(beforeDirs);
   });
 
   it("addSkill uploads local SKILL.md file", async () => {
@@ -162,6 +166,30 @@ describe("OpenVikingClient resource and skill import", () => {
       temp_file_id: "upload_skill.md",
       wait: true,
     });
+  });
+
+  it("addSkill removes temporary zip directory after uploading a skill directory", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "ov-client-test-"));
+    const dirPath = join(tempDir, "skill-dir");
+    const uploadPrefix = "openviking-openclaw-upload-";
+    const beforeDirs = (await readdir(tmpdir())).filter((name) => name.startsWith(uploadPrefix));
+    await mkdir(dirPath, { recursive: true });
+    await writeFile(join(dirPath, "SKILL.md"), "---\nname: demo\ndescription: demo\n---\n\n# Demo\n");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(okResponse({ temp_file_id: "upload_skill.zip" }))
+      .mockResolvedValueOnce(okResponse({ uri: "viking://agent/skills/demo", name: "demo" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 5000);
+    await client.addSkill({ path: dirPath, wait: true });
+
+    expect(JSON.parse(String((fetchMock.mock.calls[1]![1] as RequestInit).body))).toMatchObject({
+      temp_file_id: "upload_skill.zip",
+      wait: true,
+    });
+    const afterDirs = (await readdir(tmpdir())).filter((name) => name.startsWith(uploadPrefix));
+    expect(afterDirs).toEqual(beforeDirs);
   });
 
   it("addSkill posts raw skill data directly", async () => {

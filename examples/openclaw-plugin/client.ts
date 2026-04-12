@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { spawn } from "node:child_process";
-import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 
 import { zipSync } from "fflate";
 
@@ -200,6 +200,14 @@ function resolveWaitRequestTimeoutMs(defaultTimeoutMs: number, waitTimeoutSecond
       ? Math.ceil(waitTimeoutSeconds * 1000) + WAIT_REQUEST_TIMEOUT_BUFFER_MS
       : DEFAULT_WAIT_REQUEST_TIMEOUT_MS;
   return Math.max(defaultTimeoutMs, requestedMs);
+}
+
+async function cleanupUploadTempPath(path?: string): Promise<void> {
+  if (!path) {
+    return;
+  }
+  await rm(path, { force: true }).catch(() => undefined);
+  await rm(dirname(path), { recursive: true, force: true }).catch(() => undefined);
 }
 
 export class OpenVikingClient {
@@ -496,8 +504,7 @@ export class OpenVikingClient {
     };
     await walk(dirPath);
 
-    const zipDir = join(tmpdir(), "openviking-openclaw-upload");
-    await mkdir(zipDir, { recursive: true });
+    const zipDir = await mkdtemp(join(tmpdir(), "openviking-openclaw-upload-"));
     const zipPath = join(zipDir, `${basename(dirPath).replace(/[^a-zA-Z0-9._-]/g, "_")}-${randomUUID()}.zip`);
     await writeFile(zipPath, zipSync(files));
     return zipPath;
@@ -553,9 +560,7 @@ export class OpenVikingClient {
         requestTimeoutMs,
       );
     } finally {
-      if (cleanupPath) {
-        await rm(cleanupPath, { force: true }).catch(() => undefined);
-      }
+      await cleanupUploadTempPath(cleanupPath);
     }
   }
 
@@ -595,9 +600,7 @@ export class OpenVikingClient {
         requestTimeoutMs,
       );
     } finally {
-      if (cleanupPath) {
-        await rm(cleanupPath, { force: true }).catch(() => undefined);
-      }
+      await cleanupUploadTempPath(cleanupPath);
     }
   }
 
