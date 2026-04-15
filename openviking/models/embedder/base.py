@@ -47,7 +47,12 @@ async def embed_compat(embedder: Any, text: str, *, is_query: bool = False) -> "
     embed_async = getattr(embedder, "embed_async", None)
     if callable(embed_async):
         return await embed_async(text, is_query=is_query)
-    return embedder.embed(text, is_query=is_query)
+    try:
+        return embedder.embed(text, is_query=is_query)
+    except TypeError as exc:
+        if "is_query" not in str(exc):
+            raise
+        return embedder.embed(text)
 
 
 async def embed_batch_compat(
@@ -57,7 +62,12 @@ async def embed_batch_compat(
     embed_batch_async = getattr(embedder, "embed_batch_async", None)
     if callable(embed_batch_async):
         return await embed_batch_async(texts, is_query=is_query)
-    return embedder.embed_batch(texts, is_query=is_query)
+    try:
+        return embedder.embed_batch(texts, is_query=is_query)
+    except TypeError as exc:
+        if "is_query" not in str(exc):
+            raise
+        return embedder.embed_batch(texts)
 
 
 def truncate_and_normalize(embedding: List[float], dimension: Optional[int]) -> List[float]:

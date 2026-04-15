@@ -8,6 +8,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from openviking.core.namespace import agent_space_fragment, user_space_fragment
 from openviking.parse.parsers.constants import (
     CODE_EXTENSIONS,
     DOCUMENTATION_EXTENSIONS,
@@ -55,6 +56,7 @@ class DiffResult:
 
 class RequestQueueStats:
     processed: int = 0
+    requeue_count: int = 0
     error_count: int = 0
 
 
@@ -124,6 +126,7 @@ class SemanticProcessor(DequeueHandlerBase):
         cls,
         telemetry_id: str,
         processed: int = 0,
+        requeue_count: int = 0,
         error_count: int = 0,
     ) -> None:
         if not telemetry_id:
@@ -131,6 +134,7 @@ class SemanticProcessor(DequeueHandlerBase):
         with cls._stats_lock:
             stats = cls._request_stats_by_telemetry_id.setdefault(telemetry_id, RequestQueueStats())
             stats.processed += processed
+            stats.requeue_count += requeue_count
             stats.error_count += error_count
             cls._request_stats_order.append(telemetry_id)
             if len(cls._request_stats_order) > cls._max_cached_stats:
@@ -154,9 +158,9 @@ class SemanticProcessor(DequeueHandlerBase):
         caller's space name.
         """
         if uri.startswith("viking://agent/"):
-            return ctx.user.agent_space_name()
+            return agent_space_fragment(ctx)
         if uri.startswith("viking://user/") or uri.startswith("viking://session/"):
-            return ctx.user.user_space_name()
+            return user_space_fragment(ctx)
         # resources and anything else → shared (empty owner_space)
         return ""
 
@@ -258,6 +262,9 @@ class SemanticProcessor(DequeueHandlerBase):
                     f"Circuit breaker is open, re-enqueueing semantic message: {msg.uri}"
                 )
                 await self._reenqueue_semantic_msg(msg)
+                self._merge_request_stats(msg.telemetry_id, requeue_count=1)
+                get_request_wait_tracker().record_semantic_requeue(msg.telemetry_id)
+                self.report_requeue()
                 self.report_success()
                 return None
             collector = resolve_telemetry(msg.telemetry_id)
@@ -348,6 +355,9 @@ class SemanticProcessor(DequeueHandlerBase):
                 if msg is not None:
                     try:
                         await self._reenqueue_semantic_msg(msg)
+                        self._merge_request_stats(msg.telemetry_id, requeue_count=1)
+                        get_request_wait_tracker().record_semantic_requeue(msg.telemetry_id)
+                        self.report_requeue()
                     except Exception as requeue_err:
                         logger.error(f"Failed to re-enqueue semantic message: {requeue_err}")
                         self._merge_request_stats(msg.telemetry_id, error_count=1)
@@ -1039,7 +1049,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
         if not vlm.is_available():
             logger.warning("VLM not available, using default overview")
-            return f"# {dir_uri.split('/')[-1]}\n\nDirectory overview"
+            return f"# {dir_uri.split('/')[-1]}\n\n[Directory overview is not ready]"
 
         from openviking.session.memory.utils.language import _detect_language_from_text
 
@@ -1155,7 +1165,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 f"Failed to generate overview for {dir_uri}: {e}",
                 exc_info=True,
             )
-            return f"# {dir_uri.split('/')[-1]}\n\nDirectory overview"
+            return f"# {dir_uri.split('/')[-1]}\n\n[Directory overview is not generated]"
 
     async def _batched_generate_overview(
         self,
@@ -1246,7 +1256,7 @@ class SemanticProcessor(DequeueHandlerBase):
         partial_overviews = [p for p in partial_overviews if p is not None]
 
         if not partial_overviews:
-            return f"# {dir_name}\n\nDirectory overview"
+            return f"# {dir_name}\n\n[Directory overview is not generated]"
 
         # If only one batch succeeded, use it directly
         if len(partial_overviews) == 1:

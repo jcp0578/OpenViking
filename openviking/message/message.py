@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 from typing import List, Literal, Optional
 
 from openviking.message.part import ContextPart, Part, TextPart, ToolPart
-from openviking.utils.time_utils import format_iso8601, parse_iso_datetime
 
 
 @dataclass
@@ -21,7 +20,8 @@ class Message:
     id: str
     role: Literal["user", "assistant"]
     parts: List[Part]
-    created_at: datetime = None
+    role_id: Optional[str] = None
+    created_at: str = None
 
     @property
     def content(self) -> str:
@@ -64,13 +64,13 @@ class Message:
 
     def to_dict(self) -> dict:
         """Serialize to JSONL."""
-        created_at_val = self.created_at or datetime.now(timezone.utc)
-        created_at_str = format_iso8601(created_at_val)
+        created_at_val = self.created_at or datetime.now(timezone.utc).isoformat()
         return {
             "id": self.id,
             "role": self.role,
+            "role_id": self.role_id,
             "parts": [self._part_to_dict(p) for p in self.parts],
-            "created_at": created_at_str,
+            "created_at": created_at_val,
         }
 
     def _part_to_dict(self, part: Part) -> dict:
@@ -139,11 +139,17 @@ class Message:
             id=data["id"],
             role=data["role"],
             parts=parts,
-            created_at=parse_iso_datetime(data["created_at"]),
+            role_id=data.get("role_id"),
+            created_at=data["created_at"],
         )
 
     @classmethod
-    def create_user(cls, content: str, msg_id: str = None) -> "Message":
+    def create_user(
+        cls,
+        content: str,
+        msg_id: str = None,
+        role_id: Optional[str] = None,
+    ) -> "Message":
         """Create user message."""
         from uuid import uuid4
 
@@ -151,7 +157,8 @@ class Message:
             id=msg_id or f"msg_{uuid4().hex}",
             role="user",
             parts=[TextPart(text=content)],
-            created_at=datetime.now(timezone.utc),
+            role_id=role_id,
+            created_at=datetime.now(timezone.utc).isoformat(),
         )
 
     @classmethod
@@ -161,6 +168,7 @@ class Message:
         context_refs: List[dict] = None,
         tool_calls: List[dict] = None,
         msg_id: str = None,
+        role_id: Optional[str] = None,
     ) -> "Message":
         """Create assistant message."""
         from uuid import uuid4
@@ -194,7 +202,8 @@ class Message:
             id=msg_id or f"msg_{uuid4().hex}",
             role="assistant",
             parts=parts,
-            created_at=datetime.now(timezone.utc),
+            role_id=role_id,
+            created_at=datetime.now(timezone.utc).isoformat(),
         )
 
     def get_context_parts(self) -> List[ContextPart]:

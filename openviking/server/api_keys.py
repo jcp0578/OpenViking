@@ -12,7 +12,7 @@ from typing import Dict, Optional
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 
-from openviking.server.identity import ResolvedIdentity, Role
+from openviking.server.identity import AccountNamespacePolicy, ResolvedIdentity, Role
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import (
     AlreadyExistsError,
@@ -25,6 +25,7 @@ logger = get_logger(__name__)
 
 ACCOUNTS_PATH = "/local/_system/accounts.json"
 USERS_PATH_TEMPLATE = "/local/{account_id}/_system/users.json"
+SETTINGS_PATH_TEMPLATE = "/local/{account_id}/_system/setting.json"
 
 
 # Argon2id parameters
@@ -51,6 +52,7 @@ class AccountInfo:
 
     created_at: str
     users: Dict[str, dict] = field(default_factory=dict)
+    namespace_policy: AccountNamespacePolicy = field(default_factory=AccountNamespacePolicy)
 
 
 class APIKeyManager:
@@ -92,11 +94,19 @@ class APIKeyManager:
             users_path = USERS_PATH_TEMPLATE.format(account_id=account_id)
             users_data = await self._read_json(users_path)
             users = users_data.get("users", {}) if users_data else {}
+            settings_path = SETTINGS_PATH_TEMPLATE.format(account_id=account_id)
+            settings_data = await self._read_json(settings_path)
+            namespace_policy = AccountNamespacePolicy.from_dict(
+                (settings_data or {}).get("namespace")
+            )
 
             self._accounts[account_id] = AccountInfo(
                 created_at=info.get("created_at", ""),
                 users=users,
+                namespace_policy=namespace_policy,
             )
+            if settings_data is None:
+                await self._save_settings_json(account_id)
 
             for user_id, user_info in users.items():
                 key_or_hash = user_info.get("key", "")
@@ -168,6 +178,7 @@ class APIKeyManager:
                         role=entry.role,
                         account_id=entry.account_id,
                         user_id=entry.user_id,
+                        namespace_policy=self.get_account_policy(entry.account_id),
                     )
             else:
                 # Verify plaintext key
@@ -176,11 +187,18 @@ class APIKeyManager:
                         role=entry.role,
                         account_id=entry.account_id,
                         user_id=entry.user_id,
+                        namespace_policy=self.get_account_policy(entry.account_id),
                     )
 
         raise UnauthenticatedError("Invalid API Key")
 
-    async def create_account(self, account_id: str, admin_user_id: str) -> str:
+    async def create_account(
+        self,
+        account_id: str,
+        admin_user_id: str,
+        *,
+        namespace_policy: Optional[AccountNamespacePolicy] = None,
+    ) -> str:
         """Create a new account (workspace) with its first admin user.
 
         Returns the admin user's API key.
@@ -190,6 +208,7 @@ class APIKeyManager:
 
         now = datetime.now(timezone.utc).isoformat()
         key = self._generate_api_key()
+        policy = namespace_policy or AccountNamespacePolicy()
 
         if self._encryption_enabled:
             stored_key = self._hash_api_key(key)
@@ -210,6 +229,7 @@ class APIKeyManager:
         self._accounts[account_id] = AccountInfo(
             created_at=now,
             users={admin_user_id: user_info},
+            namespace_policy=policy,
         )
 
         entry = UserKeyEntry(
@@ -228,6 +248,7 @@ class APIKeyManager:
 
         await self._save_accounts_json()
         await self._save_users_json(account_id)
+        await self._save_settings_json(account_id)
         return key
 
     async def delete_account(self, account_id: str) -> None:
@@ -435,9 +456,18 @@ class APIKeyManager:
                     "account_id": account_id,
                     "created_at": info.created_at,
                     "user_count": len(info.users),
+                    **info.namespace_policy.to_dict(),
                 }
             )
         return result
+
+    def get_account_policy(self, account_id: Optional[str]) -> AccountNamespacePolicy:
+        if not account_id:
+            return AccountNamespacePolicy()
+        account = self._accounts.get(account_id)
+        if account is None:
+            return AccountNamespacePolicy()
+        return account.namespace_policy
 
     def get_users(self, account_id: str) -> list:
         """List all users in an account."""
@@ -454,6 +484,13 @@ class APIKeyManager:
                 }
             )
         return result
+
+    def has_user(self, account_id: str, user_id: str) -> bool:
+        """Return True when the account registry contains the given user."""
+        account = self._accounts.get(account_id)
+        if account is None:
+            return False
+        return user_id in account.users
 
     # ---- internal helpers ----
 
@@ -557,3 +594,11 @@ class APIKeyManager:
         data = {"users": account.users}
         path = USERS_PATH_TEMPLATE.format(account_id=account_id)
         await self._write_json(path, data)
+
+    async def _save_settings_json(self, account_id: str) -> None:
+        """Persist account namespace settings."""
+        account = self._accounts.get(account_id)
+        if account is None:
+            return
+        path = SETTINGS_PATH_TEMPLATE.format(account_id=account_id)
+        await self._write_json(path, {"namespace": account.namespace_policy.to_dict()})

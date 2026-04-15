@@ -9,11 +9,12 @@ to the storage system.
 
 from typing import Any, Dict, List, Optional, Tuple
 
+from openviking.core.namespace import agent_space_fragment, user_space_fragment
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryField
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
-from openviking.session.memory.merge_op import MergeOpFactory, PatchOp
+from openviking.session.memory.merge_op import MergeOpFactory
 from openviking.session.memory.utils import (
     deserialize_full,
     flat_model_to_dict,
@@ -108,7 +109,12 @@ class ExtractContext:
         # elements 可以是 Message 或 str ("...")
         elements: List[Message | str] = []
         for i, (start, end) in enumerate(ranges):
-            if start < 0 or end >= len(self.messages):
+            # 兼容 LLM 提取的 range 越界情况
+            if start < 0:
+                start = 0
+            if end >= len(self.messages):
+                end = len(self.messages) - 1
+            if start > end:
                 continue
             range_msgs = self.messages[start : end + 1]
 
@@ -140,15 +146,20 @@ class MessageRange:
 
     def _first_message_time(self) -> str | None:
         """获取第一条消息的时间（内部方法）"""
+        from datetime import datetime
+
         for elem in self.elements:
             if isinstance(elem, str):
                 continue
             if hasattr(elem, "created_at") and elem.created_at:
-                return elem.created_at.strftime("%Y-%m-%d")
+                dt = datetime.fromisoformat(elem.created_at)
+                return dt.strftime("%Y-%m-%d")
         return None
 
     def _first_message_time_with_weekday(self) -> str | None:
         """获取第一条消息的时间，带周几（内部方法）"""
+        from datetime import datetime
+
         for elem in self.elements:
             if isinstance(elem, str):
                 continue
@@ -163,8 +174,9 @@ class MessageRange:
                     "Saturday",
                     "Sunday",
                 ]
-                weekday = weekday_en[elem.created_at.weekday()]
-                return f"{elem.created_at.strftime('%Y-%m-%d')} ({weekday})"
+                dt = datetime.fromisoformat(elem.created_at)
+                weekday = weekday_en[dt.weekday()]
+                return f"{dt.strftime('%Y-%m-%d')} ({weekday})"
         return None
 
 
@@ -260,8 +272,8 @@ class MemoryUpdater:
             raise ValueError("MemoryTypeRegistry is required for URI resolution")
 
         # Get actual user/agent space from ctx
-        user_space = ctx.user.user_space_name() if ctx and ctx.user else "default"
-        agent_space = ctx.user.agent_space_name() if ctx and ctx.user else "default"
+        user_space = user_space_fragment(ctx) if ctx and ctx.user else "default"
+        agent_space = agent_space_fragment(ctx) if ctx and ctx.user else "default"
 
         # Resolve all URIs first (pass extract_context for template rendering)
         resolved_ops = resolve_all_operations(

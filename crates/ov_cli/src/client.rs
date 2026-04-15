@@ -45,6 +45,14 @@ impl HttpClient {
         }
     }
 
+    pub fn user_id(&self) -> Option<&str> {
+        self.user.as_deref()
+    }
+
+    pub fn agent_id(&self) -> Option<&str> {
+        self.agent_id.as_deref()
+    }
+
     /// Zip a directory to a temporary file
     fn zip_directory(&self, dir_path: &Path) -> Result<NamedTempFile> {
         if !dir_path.is_dir() {
@@ -596,10 +604,15 @@ impl HttpClient {
 
                 self.post("/api/v1/resources", &body).await
             } else if path_obj.is_file() {
+                let source_name = path_obj
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|s| s.to_string());
                 let temp_file_id = self.upload_temp_file(path_obj).await?;
 
                 let body = serde_json::json!({
                     "temp_file_id": temp_file_id,
+                    "source_name": source_name,
                     "to": to,
                     "parent": parent,
                     "reason": reason,
@@ -782,7 +795,11 @@ impl HttpClient {
         // Determine target path
         let to_path = Path::new(to);
         let final_path = if to_path.is_dir() {
-            let base_name = uri.trim_end_matches('/').split('/').last().unwrap_or("export");
+            let base_name = uri
+                .trim_end_matches('/')
+                .split('/')
+                .last()
+                .unwrap_or("export");
             to_path.join(format!("{}.ovpack", base_name))
         } else if !to.ends_with(".ovpack") {
             Path::new(&format!("{}.ovpack", to)).to_path_buf()
@@ -817,10 +834,7 @@ impl HttpClient {
             )));
         }
         if !file_path_obj.is_file() {
-            return Err(Error::Client(format!(
-                "Path is not a file: {}",
-                file_path
-            )));
+            return Err(Error::Client(format!("Path is not a file: {}", file_path)));
         }
 
         let temp_file_id = self.upload_temp_file(file_path_obj).await?;

@@ -23,11 +23,18 @@ from datetime import datetime
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
+from openviking.core.namespace import (
+    NamespaceShapeError,
+    canonicalize_uri,
+)
+from openviking.core.namespace import (
+    is_accessible as namespace_is_accessible,
+)
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSHTTPError
 from openviking.server.identity import RequestContext, Role
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.time_utils import format_simplified, get_current_timestamp, parse_iso_datetime
-from openviking_cli.exceptions import NotFoundError
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
@@ -153,15 +160,13 @@ def get_viking_fs() -> "VikingFS":
 
 
 class VikingFS:
-    """AGFS-based OpenViking file system.
+    """RAGFS-based OpenViking file system.
 
     APIs are divided into two categories:
-    - AGFS basic commands (direct forwarding): read, ls, write, mkdir, rm, mv, grep, stat
+    - RAGFS basic commands (direct forwarding): read, ls, write, mkdir, rm, mv, grep, stat
     - VikingFS specific capabilities: abstract, overview, find, search, relations, link, unlink
 
-    Supports two modes:
-    - HTTP mode: Use AGFSClient to connect to AGFS server via HTTP
-    - Binding mode: Use AGFSBindingClient to directly use AGFS implementation
+    Uses Rust binding mode: Use RAGFSBindingClient to directly use RAGFS implementation
     """
 
     def __init__(
@@ -844,10 +849,14 @@ class VikingFS:
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         info = self.agfs.stat(path)
-        if not info.get("isDir"):
+        if not info.get("isDir", info.get("is_dir")):
             raise ValueError(f"{uri} is not a directory")
         file_path = f"{path}/.abstract.md"
-        content_bytes = self._handle_agfs_read(self.agfs.read(file_path))
+        try:
+            content_bytes = self._handle_agfs_read(self.agfs.read(file_path))
+        except Exception:
+            # Fallback to default if .abstract.md doesn't exist
+            return f"# {uri}\n\n[Directory abstract is not ready]"
 
         if self._encryptor:
             real_ctx = self._ctx_or_default(ctx)
@@ -864,10 +873,14 @@ class VikingFS:
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         info = self.agfs.stat(path)
-        if not info.get("isDir"):
+        if not info.get("isDir", info.get("is_dir")):
             raise ValueError(f"{uri} is not a directory")
         file_path = f"{path}/.overview.md"
-        content_bytes = self._handle_agfs_read(self.agfs.read(file_path))
+        try:
+            content_bytes = self._handle_agfs_read(self.agfs.read(file_path))
+        except Exception:
+            # Fallback to default if .overview.md doesn't exist
+            return f"# {uri}\n\n[Directory overview is not ready]"
 
         if self._encryptor:
             real_ctx = self._ctx_or_default(ctx)
@@ -923,6 +936,10 @@ class VikingFS:
         )
 
         if target_uri and target_uri not in {"/", "viking://"}:
+            try:
+                target_uri = canonicalize_uri(target_uri, self._ctx_or_default(ctx))
+            except NamespaceShapeError as exc:
+                raise InvalidArgumentError(str(exc)) from exc
             self._ensure_access(target_uri, ctx)
 
         storage = self._get_vector_store()
@@ -1014,6 +1031,16 @@ class VikingFS:
 
         # Normalize target_uri to list
         target_uri_list = [target_uri] if isinstance(target_uri, str) else (target_uri or [])
+        real_ctx = self._ctx_or_default(ctx)
+        canonical_target_uri_list: List[str] = []
+        for item in target_uri_list:
+            if not item or item in {"/", "viking://"}:
+                continue
+            try:
+                canonical_target_uri_list.append(canonicalize_uri(item, real_ctx))
+            except NamespaceShapeError as exc:
+                raise InvalidArgumentError(str(exc)) from exc
+        target_uri_list = canonical_target_uri_list
         # Use first URI for context inference and access check
         primary_target_uri = target_uri_list[0] if target_uri_list else ""
 
@@ -1225,7 +1252,8 @@ class VikingFS:
         """
         real_ctx = self._ctx_or_default(ctx)
         account_id = real_ctx.account_id
-        _, parts = self._normalized_uri_parts(uri)
+        canonical_uri = canonicalize_uri(uri, real_ctx)
+        _, parts = self._normalized_uri_parts(canonical_uri)
         if not parts:
             return f"/local/{account_id}"
 
@@ -1296,27 +1324,10 @@ class VikingFS:
 
     def _is_accessible(self, uri: str, ctx: RequestContext) -> bool:
         """Check whether a URI is visible/accessible under current request context."""
-        normalized_uri, parts = self._normalized_uri_parts(uri)
-        if ctx.role == Role.ROOT:
-            return True
-        if not parts:
-            return True
-
-        scope = parts[0]
-        if scope in {"resources", "temp"}:
-            return True
-        if scope == "_system":
+        normalized_uri, _ = self._normalized_uri_parts(uri)
+        if normalized_uri.startswith("viking://_system"):
             return False
-
-        space = self._extract_space_from_uri(normalized_uri)
-        if space is None:
-            return True
-
-        if scope in {"user", "session"}:
-            return space == ctx.user.user_space_name()
-        if scope == "agent":
-            return space == ctx.user.agent_space_name()
-        return True
+        return namespace_is_accessible(normalized_uri, ctx)
 
     def _handle_agfs_read(self, result: Union[bytes, Any, None]) -> bytes:
         """Handle AGFSClient read return types consistently."""
@@ -1719,6 +1730,8 @@ class VikingFS:
                 existing_bytes = self._handle_agfs_read(self.agfs.read(path))
                 existing_bytes = await self._decrypt_content(existing_bytes, ctx=ctx)
                 existing = self._decode_bytes(existing_bytes)
+            except FileNotFoundError:
+                pass
             except AGFSHTTPError as e:
                 if e.status_code != 404:
                     raise
@@ -1789,19 +1802,22 @@ class VikingFS:
             if len(all_entries) >= node_limit:
                 break
             name = entry.get("name", "")
-            # After modification: compatible with 7+ digits of microseconds by truncating
             raw_time = entry.get("modTime", "")
-            if raw_time and len(raw_time) > 26 and "+" in raw_time:
-                # Handle strings like 2026-02-21T13:20:23.1470042+08:00
-                # Truncate to 2026-02-21T13:20:23.147004+08:00
-                parts = raw_time.split("+")
-                # Keep time part at most 26 characters (YYYY-MM-DDTHH:MM:SS.mmmmmm)
-                raw_time = parts[0][:26] + "+" + parts[1]
+            parsed_time = now
+            if isinstance(raw_time, (int, float)):
+                parsed_time = datetime.fromtimestamp(raw_time)
+            elif raw_time:
+                if len(raw_time) > 26 and "+" in raw_time:
+                    parts = raw_time.split("+")
+                    raw_time = parts[0][:26] + "+" + parts[1]
+                parsed_time = parse_iso_datetime(raw_time)
+            elif isinstance(entry.get("mtime"), (int, float)):
+                parsed_time = datetime.fromtimestamp(entry["mtime"])
             new_entry = {
                 "uri": self._path_to_uri(f"{path}/{name}", ctx=ctx),
                 "size": entry.get("size", 0),
                 "isDir": entry.get("isDir", False),
-                "modTime": format_simplified(parse_iso_datetime(raw_time), now),
+                "modTime": format_simplified(parsed_time, now),
             }
             if not self._is_accessible(new_entry["uri"], real_ctx):
                 continue

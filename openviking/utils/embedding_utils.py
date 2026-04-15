@@ -11,6 +11,8 @@ from datetime import datetime
 from typing import Dict, Optional
 
 from openviking.core.context import Context, ContextLevel, ResourceContentType, Vectorize
+from openviking.core.directories import get_context_type_for_uri
+from openviking.core.namespace import agent_space_fragment, user_space_fragment
 from openviking.server.identity import RequestContext
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
@@ -40,9 +42,9 @@ async def _decrement_embedding_tracker(semantic_msg_id: Optional[str], count: in
 def _owner_space_for_uri(uri: str, ctx: RequestContext) -> str:
     """Derive owner_space from a URI."""
     if uri.startswith("viking://agent/"):
-        return ctx.user.agent_space_name()
+        return agent_space_fragment(ctx)
     if uri.startswith("viking://user/") or uri.startswith("viking://session/"):
-        return ctx.user.user_space_name()
+        return user_space_fragment(ctx)
     return ""
 
 
@@ -326,8 +328,13 @@ async def index_resource(
 
     1. Reads .abstract.md and .overview.md and vectorizes them.
     2. Scans files in the directory and vectorizes them.
+
+    The context_type is derived from the URI so that memory directories
+    (``/memories/``) are indexed as ``"memory"`` rather than the default
+    ``"resource"``.
     """
     viking_fs = get_viking_fs()
+    context_type = get_context_type_for_uri(uri)
 
     # 1. Index Directory Metadata
     abstract_uri = f"{uri}/.abstract.md"
@@ -347,7 +354,7 @@ async def index_resource(
             overview = content.decode("utf-8")
 
     if abstract or overview:
-        await vectorize_directory_meta(uri, abstract, overview, ctx=ctx)
+        await vectorize_directory_meta(uri, abstract, overview, context_type=context_type, ctx=ctx)
 
     # 2. Index Files
     try:
@@ -368,7 +375,11 @@ async def index_resource(
             # For direct indexing, we might not have summaries.
             # We pass empty summary_dict, vectorize_file will try to read content for text files.
             await vectorize_file(
-                file_path=file_uri, summary_dict={"name": file_name}, parent_uri=uri, ctx=ctx
+                file_path=file_uri,
+                summary_dict={"name": file_name},
+                parent_uri=uri,
+                context_type=context_type,
+                ctx=ctx,
             )
 
     except Exception as e:

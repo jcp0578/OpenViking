@@ -11,15 +11,16 @@ import asyncio
 from typing import List, Optional
 
 from openviking.core.context import Context
+from openviking.core.namespace import agent_space_fragment, user_space_fragment
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater
+from openviking.session.memory.utils.json_parser import JsonUtils
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import get_viking_fs
-from openviking.telemetry import get_current_telemetry
+from openviking.telemetry import get_current_telemetry, tracer
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
-from openviking.telemetry import tracer
 from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
@@ -79,6 +80,7 @@ class SessionCompressorV2:
             registry=registry, vikingdb=self.vikingdb, transaction_handle=transaction_handle
         )
 
+    @tracer()
     async def extract_long_term_memories(
         self,
         messages: List[Message],
@@ -93,6 +95,7 @@ class SessionCompressorV2:
         Note: Returns empty List[Context] because v2 directly writes to storage.
         The list length is used for stats in session.py.
         """
+
         if not messages:
             return []
 
@@ -101,8 +104,8 @@ class SessionCompressorV2:
             return []
 
         tracer.info("Starting v2 memory extraction from conversation")
+        tracer.info(f"messages={JsonUtils.dumps(messages)}")
         config = get_openviking_config()
-
         # Initialize default memory files (soul.md, identity.md) if not exist
         from openviking.session.memory.memory_type_registry import create_default_registry
 
@@ -147,8 +150,8 @@ class SessionCompressorV2:
                 for schema in schemas:
                     if not schema.directory:
                         continue
-                    user_space = ctx.user.user_space_name() if ctx and ctx.user else "default"
-                    agent_space = ctx.user.agent_space_name() if ctx and ctx.user else "default"
+                    user_space = user_space_fragment(ctx) if ctx and ctx.user else "default"
+                    agent_space = agent_space_fragment(ctx) if ctx and ctx.user else "default"
                     # 使用 Jinja2 渲染 directory
                     import jinja2
 

@@ -431,6 +431,7 @@ class LocalClient(BaseClient):
         content: Optional[str] = None,
         parts: Optional[List[Dict[str, Any]]] = None,
         created_at: Optional[str] = None,
+        role_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 
@@ -440,15 +441,13 @@ class LocalClient(BaseClient):
             content: Text content (simple mode, backward compatible)
             parts: Parts array (full Part support mode)
             created_at: Message creation time (ISO format string)
+            role_id: Optional explicit actor identity. Omit to derive it from the local context.
 
         If both content and parts are provided, parts takes precedence.
         """
-        from datetime import datetime
-
         from openviking.message.part import Part, TextPart, part_from_dict
 
-        session = self._service.sessions.session(self._ctx, session_id)
-        await session.load()
+        session = await self._service.sessions.get(session_id, self._ctx, auto_create=True)
 
         message_parts: list[Part]
         if parts is not None:
@@ -458,15 +457,12 @@ class LocalClient(BaseClient):
         else:
             raise ValueError("Either content or parts must be provided")
 
-        # 解析 created_at
-        msg_created_at = None
-        if created_at:
-            try:
-                msg_created_at = datetime.fromisoformat(created_at)
-            except ValueError:
-                pass
+        if role_id is None and role == "user":
+            role_id = self._ctx.user.user_id
+        elif role_id is None and role == "assistant":
+            role_id = self._ctx.user.agent_id
 
-        session.add_message(role, message_parts, created_at=msg_created_at)
+        session.add_message(role, message_parts, role_id=role_id, created_at=created_at)
         return {
             "session_id": session_id,
             "message_count": len(session.messages),
