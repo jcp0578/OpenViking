@@ -205,6 +205,64 @@ describe("context-engine afterTurn()", () => {
     // Second call: assistant message
     expect(client.addSessionMessage.mock.calls[1][1]).toBe("assistant");
     expect(client.addSessionMessage.mock.calls[1][2]).toContain("hi there");
+    expect(client.addSessionMessage.mock.calls[0][5]).toBeUndefined();
+    expect(client.addSessionMessage.mock.calls[1][5]).toBeUndefined();
+  });
+
+  it("passes senderId as role_id for multi-user user messages only", async () => {
+    const { engine, client } = makeEngine({
+      cfgOverrides: {
+        userMode: "multi-user",
+        accountId: "acme",
+        apiKey: "admin-key",
+      },
+    });
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages: [
+        { role: "user", content: "hello world" },
+        { role: "assistant", content: "hi there" },
+      ],
+      prePromptMessageCount: 0,
+      runtimeContext: { senderId: "alice" },
+    });
+
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
+    expect(client.addSessionMessage.mock.calls[0][1]).toBe("user");
+    expect(client.addSessionMessage.mock.calls[0][5]).toBe("alice");
+    expect(client.addSessionMessage.mock.calls[0][6]).toMatchObject({
+      accountId: "acme",
+      userId: "alice",
+    });
+    expect(client.addSessionMessage.mock.calls[1][1]).toBe("assistant");
+    expect(client.addSessionMessage.mock.calls[1][5]).toBeUndefined();
+  });
+
+  it("skips multi-user user writes when senderId is missing", async () => {
+    const { engine, client, logger } = makeEngine({
+      cfgOverrides: {
+        userMode: "multi-user",
+        apiKey: "admin-key",
+      },
+    });
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages: [{ role: "user", content: "hello world" }],
+      prePromptMessageCount: 0,
+      runtimeContext: {},
+    });
+
+    expect(client.addSessionMessage).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("missing senderId"),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("\"reason\":\"missing_sender_id\""),
+    );
   });
 
   it("passes the latest non-system message timestamp to addSessionMessage as ISO string", async () => {

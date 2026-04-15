@@ -6,6 +6,11 @@
       "label": "Mode",
       "help": "local = plugin starts OpenViking (like Claude Code); remote = use existing HTTP server"
     },
+    "userMode": {
+      "label": "User Mode",
+      "placeholder": "single-user",
+      "help": "single-user keeps current behavior; multi-user requires a privileged apiKey and writes senderId as session role_id."
+    },
     "configPath": {
       "label": "Config path (local)",
       "placeholder": "~/.openviking/ov.conf",
@@ -22,10 +27,20 @@
       "placeholder": "http://127.0.0.1:1933",
       "help": "HTTP URL when mode is remote (or ${OPENVIKING_BASE_URL})"
     },
+    "accountId": {
+      "label": "Account ID (multi-user / ROOT)",
+      "placeholder": "default",
+      "help": "Optional tenant account ID. Required when multi-user mode uses a ROOT apiKey."
+    },
     "agentId": {
       "label": "Agent ID",
       "placeholder": "random unique ID",
       "help": "Instance prefix for X-OpenViking-Agent. Non-default: `<this>_<OpenClaw ctx.agentId>` (sanitized to letters/digits/_/-). default: use OpenClaw session agent only."
+    },
+    "userId": {
+      "label": "User ID (single-user)",
+      "placeholder": "default",
+      "help": "Default X-OpenViking-User in single-user mode. Ignored in multi-user mode."
     },
     "apiKey": {
       "label": "OpenViking API Key",
@@ -143,6 +158,9 @@
       "mode": {
         "type": "string"
       },
+      "userMode": {
+        "type": "string"
+      },
       "configPath": {
         "type": "string"
       },
@@ -152,7 +170,13 @@
       "baseUrl": {
         "type": "string"
       },
+      "accountId": {
+        "type": "string"
+      },
       "agentId": {
+        "type": "string"
+      },
+      "userId": {
         "type": "string"
       },
       "apiKey": {

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { OpenVikingClient, OVMessage } from "./client.js";
+import type { OpenVikingClient, OVMessage, RequestTenantContext } from "./client.js";
 import type { MemoryOpenVikingConfig } from "./config.js";
 import {
   compileSessionPatterns,
@@ -103,6 +103,11 @@ type Logger = {
   error: (msg: string) => void;
 };
 
+type ExtractedSender = {
+  found: boolean;
+  senderId?: string;
+};
+
 function estimateTokens(messages: AgentMessage[]): number {
   return Math.max(1, messages.length * 80);
 }
@@ -188,6 +193,26 @@ function validTokenBudget(raw: unknown): number | undefined {
     return raw;
   }
   return undefined;
+}
+
+function extractRuntimeSenderId(
+  runtimeContext: Record<string, unknown> | undefined,
+): ExtractedSender {
+  if (!runtimeContext) {
+    return { found: false };
+  }
+  const senderId = runtimeContext.senderId;
+  if (typeof senderId !== "string") {
+    return { found: false };
+  }
+  const trimmed = senderId.trim();
+  if (!trimmed) {
+    return { found: false };
+  }
+  return {
+    found: true,
+    senderId: trimmed,
+  };
 }
 
 /** OpenClaw session UUID (path-safe on Windows). */
@@ -490,8 +515,19 @@ export function createMemoryOpenVikingContextEngine(params: {
   quickPrecheck?: () => Promise<{ ok: true } | { ok: false; reason: string }>;
   /** Extra args help match hook-populated routing when OpenClaw provides sessionKey / OV session id. */
   resolveAgentId: (sessionId: string, sessionKey?: string, ovSessionId?: string) => string;
+  resolveRequestContext?: (
+    sessionId?: string,
+    sessionKey?: string,
+    ovSessionId?: string,
+  ) => RequestTenantContext | undefined;
   rememberSessionAgentId?: (ctx: {
     agentId?: string;
+    sessionId?: string;
+    sessionKey?: string;
+    ovSessionId?: string;
+  }) => void;
+  rememberSessionSenderId?: (ctx: {
+    senderId?: string;
     sessionId?: string;
     sessionKey?: string;
     ovSessionId?: string;
@@ -506,7 +542,9 @@ export function createMemoryOpenVikingContextEngine(params: {
     getClient,
     quickPrecheck,
     resolveAgentId,
+    resolveRequestContext,
     rememberSessionAgentId,
+    rememberSessionSenderId,
   } = params;
 
   const diagEnabled = cfg.emitStandardDiagnostics;
@@ -533,8 +571,9 @@ export function createMemoryOpenVikingContextEngine(params: {
         sessionKey,
         ovSessionId: ovId,
       });
+      const requestContext = resolveRequestContext?.(sessionId, sessionKey, ovId);
       const agentId = resolveAgentId(sessionId, sessionKey, ovId);
-      const commitResult = await client.commitSession(ovId, { wait: true, agentId });
+      const commitResult = await client.commitSession(ovId, { wait: true, agentId, requestContext });
       const memCount = totalExtractedMemories(commitResult.memories_extracted);
       if (commitResult.status === "failed") {
         warnOrInfo(logger, `openviking: commit Phase 2 failed for session=${sessionId}: ${commitResult.error ?? "unknown"}`);
@@ -631,6 +670,7 @@ export function createMemoryOpenVikingContextEngine(params: {
       const { messages } = assembleParams;
       const tokenBudget = validTokenBudget(assembleParams.tokenBudget) ?? 128_000;
       const sessionKey = extractAssembleSessionKey(assembleParams);
+      const sender = extractRuntimeSenderId(assembleParams.runtimeContext);
 
       const originalTokens = roughEstimate(messages);
 
@@ -641,11 +681,27 @@ export function createMemoryOpenVikingContextEngine(params: {
         agentId: extractRuntimeAgentId(assembleParams.runtimeContext),
         ovSessionId: OVSessionId,
       });
+      rememberSessionSenderId?.({
+        senderId: sender.senderId,
+        sessionId: assembleParams.sessionId,
+        sessionKey,
+        ovSessionId: OVSessionId,
+      });
+      const requestContext =
+        (cfg.userMode === "multi-user" && sender.found
+          ? {
+              userId: sender.senderId,
+              ...(cfg.accountId ? { accountId: cfg.accountId } : {}),
+            }
+          : resolveRequestContext?.(assembleParams.sessionId, sessionKey, OVSessionId));
       diag("assemble_entry", OVSessionId, {
         messagesCount: messages.length,
         inputTokenEstimate: originalTokens,
         tokenBudget,
         sessionKey: sessionKey ?? null,
+        userMode: cfg.userMode,
+        senderIdFound: sender.found,
+        senderId: sender.senderId ?? null,
         messages: messageDigest(messages),
       });
 
@@ -658,6 +714,9 @@ export function createMemoryOpenVikingContextEngine(params: {
           estimatedTokens: originalTokens,
           tokensSaved: 0,
           savingPct: 0,
+          userMode: cfg.userMode,
+          senderIdFound: sender.found,
+          senderId: sender.senderId ?? null,
         });
         return { messages, estimatedTokens: originalTokens };
       }
@@ -676,6 +735,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           OVSessionId,
           tokenBudget,
           agentId,
+          requestContext,
         );
 
         const preAbstracts = ctx?.pre_archive_abstracts ?? [];
@@ -690,6 +750,9 @@ export function createMemoryOpenVikingContextEngine(params: {
             inputTokenEstimate: originalTokens,
             estimatedTokens: originalTokens,
             tokensSaved: 0, savingPct: 0,
+            userMode: cfg.userMode,
+            senderIdFound: sender.found,
+            senderId: sender.senderId ?? null,
           });
           return { messages, estimatedTokens: roughEstimate(messages) };
         }
@@ -702,6 +765,9 @@ export function createMemoryOpenVikingContextEngine(params: {
             inputTokenEstimate: originalTokens,
             estimatedTokens: originalTokens,
             tokensSaved: 0, savingPct: 0,
+            userMode: cfg.userMode,
+            senderIdFound: sender.found,
+            senderId: sender.senderId ?? null,
           });
           return { messages, estimatedTokens: roughEstimate(messages) };
         }
@@ -739,6 +805,9 @@ export function createMemoryOpenVikingContextEngine(params: {
             inputTokenEstimate: originalTokens,
             estimatedTokens: originalTokens,
             tokensSaved: 0, savingPct: 0,
+            userMode: cfg.userMode,
+            senderIdFound: sender.found,
+            senderId: sender.senderId ?? null,
           });
           return { messages, estimatedTokens: roughEstimate(messages) };
         }
@@ -757,6 +826,9 @@ export function createMemoryOpenVikingContextEngine(params: {
           estimatedTokens: assembledTokens,
           tokensSaved,
           savingPct,
+          userMode: cfg.userMode,
+          senderIdFound: sender.found,
+          senderId: sender.senderId ?? null,
           messages: messageDigest(sanitized),
         });
 
@@ -777,6 +849,9 @@ export function createMemoryOpenVikingContextEngine(params: {
           error: String(err),
           tokenBudget,
           agentId: resolveAgentId(OVSessionId),
+          userMode: cfg.userMode,
+          senderIdFound: sender.found,
+          senderId: sender.senderId ?? null,
         });
         return { messages, estimatedTokens: roughEstimate(messages) };
       }
@@ -791,6 +866,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         return;
       }
 
+      const sender = extractRuntimeSenderId(afterTurnParams.runtimeContext);
       try {
         const sessionKey =
           (typeof afterTurnParams.sessionKey === "string" && afterTurnParams.sessionKey.trim()) ||
@@ -808,6 +884,12 @@ export function createMemoryOpenVikingContextEngine(params: {
             ovSessionId: OVSessionId,
           });
         }
+        rememberSessionSenderId?.({
+          senderId: sender.senderId,
+          sessionId: afterTurnParams.sessionId,
+          sessionKey,
+          ovSessionId: OVSessionId,
+        });
         const routingRef =
           afterTurnParams.sessionId ?? sessionKey ?? OVSessionId;
         const agentId = resolveAgentId(routingRef, sessionKey, OVSessionId);
@@ -816,6 +898,9 @@ export function createMemoryOpenVikingContextEngine(params: {
           diag("afterTurn_skip", OVSessionId, {
             reason: "session_bypassed",
             totalMessages: afterTurnParams.messages?.length ?? 0,
+            userMode: cfg.userMode,
+            senderIdFound: sender.found,
+            senderId: sender.senderId ?? null,
           });
           return;
         }
@@ -825,6 +910,9 @@ export function createMemoryOpenVikingContextEngine(params: {
           diag("afterTurn_skip", OVSessionId, {
             reason: "no_messages",
             totalMessages: 0,
+            userMode: cfg.userMode,
+            senderIdFound: sender.found,
+            senderId: sender.senderId ?? null,
           });
           return;
         }
@@ -842,6 +930,9 @@ export function createMemoryOpenVikingContextEngine(params: {
             reason: "no_new_turn_messages",
             totalMessages: messages.length,
             prePromptMessageCount: start,
+            userMode: cfg.userMode,
+            senderIdFound: sender.found,
+            senderId: sender.senderId ?? null,
           });
           return;
         }
@@ -859,6 +950,9 @@ export function createMemoryOpenVikingContextEngine(params: {
           newMessageCount: newCount,
           prePromptMessageCount: start,
           newTurnTokens,
+          userMode: cfg.userMode,
+          senderIdFound: sender.found,
+          senderId: sender.senderId ?? null,
           messages: newMsgFull,
         });
 
@@ -866,6 +960,9 @@ export function createMemoryOpenVikingContextEngine(params: {
           totalMessages: messages.length,
           newMessageCount: newCount,
           prePromptMessageCount: start,
+          userMode: cfg.userMode,
+          senderIdFound: sender.found,
+          senderId: sender.senderId ?? null,
         }))) {
           return;
         }
@@ -894,15 +991,53 @@ export function createMemoryOpenVikingContextEngine(params: {
         }
 
         if (groups.length === 0) {
-          diag("afterTurn_skip", OVSessionId, { reason: "sanitized_empty" });
+          diag("afterTurn_skip", OVSessionId, {
+            reason: "sanitized_empty",
+            userMode: cfg.userMode,
+            senderIdFound: sender.found,
+            senderId: sender.senderId ?? null,
+          });
           return;
         }
 
-        for (const group of groups) {
-          await client.addSessionMessage(OVSessionId, group.role, group.texts.join("\n"), agentId, createdAt);
+        const hasUserGroup = groups.some((group) => group.role === "user");
+        if (cfg.userMode === "multi-user" && hasUserGroup && !sender.found) {
+          warnOrInfo(
+            logger,
+            `openviking: multi-user afterTurn missing senderId for session=${OVSessionId}`,
+          );
+          diag("afterTurn_skip", OVSessionId, {
+            reason: "missing_sender_id",
+            userMode: cfg.userMode,
+            senderIdFound: sender.found,
+            senderId: null,
+          });
+          return;
         }
 
-        const session = await client.getSession(OVSessionId, agentId);
+        const requestContext: RequestTenantContext | undefined =
+          cfg.userMode === "multi-user" && sender.found
+            ? {
+                ...(cfg.accountId ? { accountId: cfg.accountId } : {}),
+                userId: sender.senderId,
+              }
+            : undefined;
+
+        for (const group of groups) {
+          const roleId =
+            cfg.userMode === "multi-user" && group.role === "user" ? sender.senderId : undefined;
+          await client.addSessionMessage(
+            OVSessionId,
+            group.role,
+            group.texts.join("\n"),
+            agentId,
+            createdAt,
+            roleId,
+            roleId ? requestContext : undefined,
+          );
+        }
+
+        const session = await client.getSession(OVSessionId, agentId, requestContext);
         const pendingTokens = session.pending_tokens ?? 0;
 
         if (pendingTokens < cfg.commitTokenThreshold) {
@@ -910,15 +1045,30 @@ export function createMemoryOpenVikingContextEngine(params: {
             reason: "below_threshold",
             pendingTokens,
             commitTokenThreshold: cfg.commitTokenThreshold,
+            userMode: cfg.userMode,
+            senderIdFound: sender.found,
+            senderId: sender.senderId ?? null,
           });
           return;
         }
 
-        const commitResult = await client.commitSession(OVSessionId, { wait: false, agentId });
+        const commitResult = await client.commitSession(OVSessionId, {
+          wait: false,
+          agentId,
+          requestContext,
+        });
         const allTexts = groups.flatMap((g) => g.texts).join("\n");
-        const commitExtra = cfg.logFindRequests
-          ? ` ${toJsonLog({ captured: [trimForLog(allTexts, 260)] })}`
-          : "";
+        const commitExtraPayload: Record<string, unknown> = {
+          userMode: cfg.userMode,
+          senderIdFound: sender.found,
+          senderId: sender.senderId ?? null,
+          roleIdApplied: cfg.userMode === "multi-user" && sender.found,
+          effectiveAccountId: cfg.accountId || null,
+        };
+        if (cfg.logFindRequests) {
+          commitExtraPayload.captured = [trimForLog(allTexts, 260)];
+        }
+        const commitExtra = ` ${toJsonLog(commitExtraPayload)}`;
         logger.info(
           `openviking: committed session=${OVSessionId}, ` +
             `status=${commitResult.status}, archived=${commitResult.archived ?? false}, ` +
@@ -932,6 +1082,11 @@ export function createMemoryOpenVikingContextEngine(params: {
           archived: commitResult.archived ?? false,
           taskId: commitResult.task_id ?? null,
           extractedMemories: totalExtractedMemories(commitResult.memories_extracted),
+          userMode: cfg.userMode,
+          senderIdFound: sender.found,
+          senderId: sender.senderId ?? null,
+          roleIdApplied: cfg.userMode === "multi-user" && sender.found,
+          effectiveAccountId: cfg.accountId || null,
         });
         if (commitResult.task_id && cfg.logFindRequests) {
           logger.info(
@@ -952,6 +1107,9 @@ export function createMemoryOpenVikingContextEngine(params: {
         warnOrInfo(logger, `openviking: afterTurn failed: ${String(err)}`);
         diag("afterTurn_error", afterTurnParams.sessionId ?? "(unknown)", {
           error: String(err),
+          userMode: cfg.userMode,
+          senderIdFound: sender.found,
+          senderId: sender.senderId ?? null,
         });
       }
     },
@@ -984,11 +1142,12 @@ export function createMemoryOpenVikingContextEngine(params: {
 
       const client = await getClient();
       const agentId = resolveAgentId(OVSessionId);
+      const requestContext = resolveRequestContext?.(compactParams.sessionId, sessionKey, OVSessionId);
       const tokensBeforeOriginal = validTokenBudget(compactParams.currentTokenCount);
       let preCommitEstimatedTokens: number | undefined;
       if (typeof tokensBeforeOriginal !== "number") {
         try {
-          const preCtx = await client.getSessionContext(OVSessionId, tokenBudget, agentId);
+          const preCtx = await client.getSessionContext(OVSessionId, tokenBudget, agentId, requestContext);
           if (
             typeof preCtx.estimatedTokens === "number" &&
             Number.isFinite(preCtx.estimatedTokens)
@@ -1009,7 +1168,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         logger.info(
           `openviking: compact committing session=${OVSessionId} (wait=true, tokenBudget=${tokenBudget})`,
         );
-        const commitResult = await client.commitSession(OVSessionId, { wait: true, agentId });
+        const commitResult = await client.commitSession(OVSessionId, { wait: true, agentId, requestContext });
         const memCount = totalExtractedMemories(commitResult.memories_extracted);
 
         if (commitResult.status === "failed") {
@@ -1111,7 +1270,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         let contextFetchError: string | undefined;
 
         try {
-          const ctx = await client.getSessionContext(OVSessionId, tokenBudget, agentId);
+          const ctx = await client.getSessionContext(OVSessionId, tokenBudget, agentId, requestContext);
           if (typeof ctx.latest_archive_overview === "string") {
             summary = ctx.latest_archive_overview.trim();
           }

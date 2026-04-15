@@ -5,12 +5,18 @@ import { resolve as resolvePath } from "node:path";
 export type MemoryOpenVikingConfig = {
   /** "local" = plugin starts OpenViking server as child process (like Claude Code); "remote" = use existing HTTP server */
   mode?: "local" | "remote";
+  /** single-user keeps existing behavior; multi-user enables explicit session role_id writes. */
+  userMode?: "single-user" | "multi-user";
   /** Path to ov.conf; used when mode is "local". Default ~/.openviking/ov.conf */
   configPath?: string;
   /** Port for local server when mode is "local". Ignored when mode is "remote". */
   port?: number;
   baseUrl?: string;
+  /** Required for multi-user mode when apiKey is a ROOT key. */
+  accountId?: string;
   agentId?: string;
+  /** Default X-OpenViking-User in single-user mode. Ignored in multi-user mode. */
+  userId?: string;
   apiKey?: string;
   targetUri?: string;
   timeoutMs?: number;
@@ -41,6 +47,7 @@ export type MemoryOpenVikingConfig = {
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:1933";
 const DEFAULT_PORT = 1933;
+const DEFAULT_USER_MODE = "single-user";
 const DEFAULT_TARGET_URI = "viking://user/memories";
 const DEFAULT_TIMEOUT_MS = 15000;
 const DEFAULT_CAPTURE_MODE = "semantic";
@@ -66,6 +73,13 @@ function resolveAgentId(configured: unknown): string {
     return configured.trim();
   }
   return DEFAULT_AGENT_ID;
+}
+
+function resolveOptionalUserId(configured: unknown): string {
+  if (typeof configured === "string" && configured.trim()) {
+    return configured.trim();
+  }
+  return "";
 }
 
 function resolveEnvVars(value: string): string {
@@ -143,10 +157,13 @@ export const memoryOpenVikingConfigSchema = {
       cfg,
       [
         "mode",
+        "userMode",
         "configPath",
         "port",
         "baseUrl",
+        "accountId",
         "agentId",
+        "userId",
         "apiKey",
         "targetUri",
         "timeoutMs",
@@ -174,6 +191,10 @@ export const memoryOpenVikingConfigSchema = {
     const mode = (cfg.mode === "local" || cfg.mode === "remote" ? cfg.mode : "local") as
       | "local"
       | "remote";
+    const userMode =
+      (cfg.userMode === "single-user" || cfg.userMode === "multi-user"
+        ? cfg.userMode
+        : DEFAULT_USER_MODE) as "single-user" | "multi-user";
     const port = Math.max(1, Math.min(65535, Math.floor(toNumber(cfg.port, DEFAULT_PORT))));
     const rawConfigPath =
       typeof cfg.configPath === "string" && cfg.configPath.trim()
@@ -188,6 +209,11 @@ export const memoryOpenVikingConfigSchema = {
       mode === "local" ? localBaseUrl : (typeof cfg.baseUrl === "string" ? cfg.baseUrl : resolveDefaultBaseUrl());
     const resolvedBaseUrl = resolveEnvVars(rawBaseUrl).replace(/\/+$/, "");
     const rawApiKey = typeof cfg.apiKey === "string" ? cfg.apiKey : process.env.OPENVIKING_API_KEY;
+    const resolvedApiKey = rawApiKey ? resolveEnvVars(rawApiKey) : "";
+    const accountId =
+      typeof cfg.accountId === "string" && cfg.accountId.trim()
+        ? resolveEnvVars(cfg.accountId.trim())
+        : "";
     const captureMode = cfg.captureMode;
     if (
       typeof captureMode !== "undefined" &&
@@ -196,14 +222,20 @@ export const memoryOpenVikingConfigSchema = {
     ) {
       throw new Error(`openviking captureMode must be "semantic" or "keyword"`);
     }
+    if (userMode === "multi-user" && !resolvedApiKey) {
+      throw new Error(`openviking multi-user mode requires apiKey`);
+    }
 
     return {
       mode,
+      userMode,
       configPath,
       port,
       baseUrl: resolvedBaseUrl,
+      accountId,
       agentId: resolveAgentId(cfg.agentId),
-      apiKey: rawApiKey ? resolveEnvVars(rawApiKey) : "",
+      userId: userMode === "multi-user" ? "" : resolveOptionalUserId(cfg.userId),
+      apiKey: resolvedApiKey,
       targetUri: typeof cfg.targetUri === "string" ? cfg.targetUri : DEFAULT_TARGET_URI,
       timeoutMs: Math.max(1000, Math.floor(toNumber(cfg.timeoutMs, DEFAULT_TIMEOUT_MS))),
       autoCapture: cfg.autoCapture !== false,
@@ -277,6 +309,11 @@ export const memoryOpenVikingConfigSchema = {
       label: "Mode",
       help: "local = plugin starts OpenViking server (like Claude Code); remote = use existing HTTP server",
     },
+    userMode: {
+      label: "User Mode",
+      placeholder: DEFAULT_USER_MODE,
+      help: 'single-user keeps current behavior; multi-user requires a privileged apiKey and writes senderId as session role_id.',
+    },
     configPath: {
       label: "Config path (local)",
       placeholder: DEFAULT_LOCAL_CONFIG_PATH,
@@ -293,10 +330,20 @@ export const memoryOpenVikingConfigSchema = {
       placeholder: DEFAULT_BASE_URL,
       help: "HTTP URL when mode is remote (or use ${OPENVIKING_BASE_URL})",
     },
+    accountId: {
+      label: "Account ID (multi-user / ROOT)",
+      placeholder: "default",
+      help: "Optional tenant account ID. Required when multi-user mode uses a ROOT apiKey.",
+    },
     agentId: {
       label: "Agent ID",
       placeholder: "auto-generated",
       help: 'OpenViking X-OpenViking-Agent: non-default values combine with OpenClaw ctx.agentId as "<config>_<sessionAgent>" (then sanitized to [a-zA-Z0-9_-]). Use "default" to send only ctx.agentId.',
+    },
+    userId: {
+      label: "User ID (single-user)",
+      placeholder: "default",
+      help: "Default X-OpenViking-User in single-user mode. Ignored in multi-user mode.",
     },
     apiKey: {
       label: "OpenViking API Key",

@@ -27,6 +27,8 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.captureMaxLength).toBe(24000);
     expect(cfg.recallMaxContentChars).toBe(500);
     expect(cfg.agentId).toBe("default");
+    expect(cfg.userId).toBe("");
+    expect(cfg.userMode).toBe("single-user");
     expect(cfg.emitStandardDiagnostics).toBe(false);
   });
 
@@ -163,5 +165,47 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
   it("falls back to 'default' for empty agentId", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({ agentId: "  " });
     expect(cfg.agentId).toBe("default");
+  });
+
+  it("accepts multi-user mode when apiKey is present", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      mode: "remote",
+      userMode: "multi-user",
+      apiKey: "root-or-admin-key",
+      accountId: "acme",
+    });
+    expect(cfg.userMode).toBe("multi-user");
+    expect(cfg.apiKey).toBe("root-or-admin-key");
+    expect(cfg.accountId).toBe("acme");
+    expect(cfg.userId).toBe("");
+  });
+
+  it("uses configured userId in single-user mode", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      mode: "remote",
+      userId: "alice",
+    });
+    expect(cfg.userMode).toBe("single-user");
+    expect(cfg.userId).toBe("alice");
+  });
+
+  it("ignores configured userId in multi-user mode", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      mode: "remote",
+      userMode: "multi-user",
+      apiKey: "root-or-admin-key",
+      userId: "alice",
+    });
+    expect(cfg.userMode).toBe("multi-user");
+    expect(cfg.userId).toBe("");
+  });
+
+  it("throws when multi-user mode does not provide apiKey", () => {
+    expect(() =>
+      memoryOpenVikingConfigSchema.parse({
+        mode: "remote",
+        userMode: "multi-user",
+      }),
+    ).toThrow("multi-user mode requires apiKey");
   });
 });
