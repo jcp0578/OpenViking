@@ -49,6 +49,12 @@ The main rules are:
 - when `plugins.entries.openviking.config.agentId` is not `default`, prefix the session agent as `<configAgentId>_<sessionAgent>`
 - add `X-OpenViking-Account`, `X-OpenViking-User`, and `X-OpenViking-Agent` in the client layer
 
+For remote tenant routing, the current behavior is:
+
+- in `single-user`, config `accountId` and `userId` become the default tenant headers
+- in `multi-user`, config `userId` is ignored; runtime sender identity drives `X-OpenViking-User` and session `role_id`
+- the client still checks `/api/v1/system/status`; if configured `userId` and server-reported user disagree, it emits a warning so tenant mismatches are visible
+
 This matters because the plugin is built to support multi-agent and multi-session OpenClaw usage without mixing memories across sessions.
 
 ## Prompt-Front Recall Flow

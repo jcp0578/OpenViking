@@ -126,8 +126,11 @@ Use this mode when you already have a running OpenViking server and want OpenCla
 | Parameter | Default | Meaning |
 | --- | --- | --- |
 | `mode` | `remote` | Connect to an existing OpenViking server |
+| `userMode` | `single-user` | `single-user` keeps current behavior; `multi-user` writes `senderId` as session `role_id` |
 | `baseUrl` | `http://127.0.0.1:1933` | Remote OpenViking HTTP endpoint |
-| `apiKey` | empty | Optional OpenViking API key |
+| `apiKey` | empty | Optional in `single-user`; required and must be an ADMIN/ROOT-capable key in `multi-user` |
+| `accountId` | empty | Optional tenant account header in `single-user`; required when `userMode=multi-user` and `apiKey` is a ROOT key |
+| `userId` | empty | Optional default `X-OpenViking-User` in `single-user`; ignored in `multi-user` |
 | `agentId` | `default` | Logical identifier used by this OpenClaw instance on the remote server |
 
 Common remote-mode settings:
@@ -136,8 +139,31 @@ Common remote-mode settings:
 openclaw config set plugins.entries.openviking.config.mode remote
 openclaw config set plugins.entries.openviking.config.baseUrl http://your-server:1933
 openclaw config set plugins.entries.openviking.config.apiKey your-api-key
+openclaw config set plugins.entries.openviking.config.accountId your-account-id
+openclaw config set plugins.entries.openviking.config.userId your-user-id
 openclaw config set plugins.entries.openviking.config.agentId your-agent-id
 ```
+
+Single-user note:
+
+- `accountId` and `userId` become the default `X-OpenViking-Account` / `X-OpenViking-User` headers.
+- The plugin also calls `/api/v1/system/status` for diagnostics. If the configured `userId` does not match the server-reported user, the plugin emits a warning so misconfigured keys are visible.
+
+Multi-user example:
+
+```bash
+openclaw config set plugins.entries.openviking.config.mode remote
+openclaw config set plugins.entries.openviking.config.userMode multi-user
+openclaw config set plugins.entries.openviking.config.baseUrl http://your-server:1933
+openclaw config set plugins.entries.openviking.config.apiKey your-admin-or-root-key
+openclaw config set plugins.entries.openviking.config.accountId your-account-id   # required for ROOT keys
+openclaw config set plugins.entries.openviking.config.agentId your-agent-id
+```
+
+Multi-user note:
+
+- Do not set `userId` in plugin config. It is ignored in `multi-user`.
+- The effective user comes from runtime sender identity and is written as session `role_id` for user messages.
 
 ## Start
 

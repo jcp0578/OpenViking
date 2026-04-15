@@ -49,6 +49,12 @@
 - 若 `plugins.entries.openviking.config.agentId` 不是 `default`，会形成 `<configAgentId>_<sessionAgent>` 的前缀形式。
 - client 层统一补全 `X-OpenViking-Account`、`X-OpenViking-User`、`X-OpenViking-Agent` 这些 header。
 
+针对 remote 模式下的租户路由，当前实现补充了这几条规则：
+
+- `single-user` 下，配置里的 `accountId` 和 `userId` 会作为默认租户头发送。
+- `multi-user` 下，配置里的 `userId` 被忽略；实际 `X-OpenViking-User` 和 session `role_id` 都来自运行时 sender。
+- client 仍会调用 `/api/v1/system/status` 做诊断；如果配置 `userId` 和服务端识别 user 不一致，会输出 warning，避免租户错配被静默掩盖。
+
 这样做是为了支持多 agent、多 session 并发时的记忆隔离，避免不同 OpenClaw 会话串用同一套长期上下文。
 
 ## Prompt 前召回链路

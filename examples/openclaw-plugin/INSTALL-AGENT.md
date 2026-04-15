@@ -226,6 +226,23 @@ Service-side model configuration is not stored in the OpenClaw plugin config. It
 
 ### Remote Mode
 
+Core OpenClaw plugin fields:
+
+- `mode=remote`
+- `userMode`
+- `baseUrl`
+- `apiKey`
+- `accountId`
+- `userId` (`single-user` only)
+- `agentId`
+
+Rules:
+
+- `single-user`: `accountId` and `userId` become default tenant headers.
+- `multi-user`: ignore config `userId`; runtime sender identity must drive `X-OpenViking-User` and session `role_id`.
+- `multi-user + ROOT key`: `accountId` is required.
+- If configured `userId` disagrees with `/api/v1/system/status`, the plugin logs a warning. Treat that as a routing mismatch, not a harmless log line.
+
 Check the whole config first:
 
 ```bash
@@ -235,8 +252,10 @@ openclaw config get plugins.entries.openviking.config
 Core OpenClaw plugin fields:
 
 - `mode=remote`
+- `userMode` (`single-user` by default; use `multi-user` to write senderId as session role_id)
 - `baseUrl`
-- `apiKey`
+- `apiKey` (`multi-user` requires an ADMIN/ROOT-capable key)
+- `accountId` (required for `multi-user` when using a ROOT key)
 - `agentId`
 
 ## Uninstall

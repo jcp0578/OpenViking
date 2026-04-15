@@ -119,8 +119,11 @@ openclaw config set plugins.entries.openviking.config.port 1933
 | 参数 | 默认值 | 含义 |
 | --- | --- | --- |
 | `mode` | `remote` | 使用已有远端 OpenViking 服务 |
+| `userMode` | `single-user` | `single-user` 保持当前行为；`multi-user` 会把 `senderId` 写入 session `role_id` |
 | `baseUrl` | `http://127.0.0.1:1933` | 远端 OpenViking 服务地址 |
-| `apiKey` | 空 | 远端 OpenViking API Key；服务端未开启认证时可不填 |
+| `apiKey` | 空 | `single-user` 下可不填；`multi-user` 下必填，且必须是具备 ADMIN/ROOT 能力的 key |
+| `accountId` | 空 | `single-user` 下可作为默认租户头；`userMode=multi-user` 且 `apiKey` 为 ROOT key 时必填 |
+| `userId` | 空 | `single-user` 下可作为默认 `X-OpenViking-User`；`multi-user` 下忽略 |
 | `agentId` | `default` | 当前 OpenClaw 实例在远端 OpenViking 上的标识 |
 
 常见设置：
@@ -129,8 +132,31 @@ openclaw config set plugins.entries.openviking.config.port 1933
 openclaw config set plugins.entries.openviking.config.mode remote
 openclaw config set plugins.entries.openviking.config.baseUrl http://your-server:1933
 openclaw config set plugins.entries.openviking.config.apiKey your-api-key
+openclaw config set plugins.entries.openviking.config.accountId your-account-id
+openclaw config set plugins.entries.openviking.config.userId your-user-id
 openclaw config set plugins.entries.openviking.config.agentId your-agent-id
 ```
+
+single-user 说明：
+
+- `accountId` 和 `userId` 会作为默认 `X-OpenViking-Account` / `X-OpenViking-User` 请求头发送。
+- 插件仍会调用 `/api/v1/system/status` 做诊断；如果配置的 `userId` 和服务端识别出的 user 不一致，会输出 warning，便于排查 key 或租户配置错误。
+
+multi-user 示例：
+
+```bash
+openclaw config set plugins.entries.openviking.config.mode remote
+openclaw config set plugins.entries.openviking.config.userMode multi-user
+openclaw config set plugins.entries.openviking.config.baseUrl http://your-server:1933
+openclaw config set plugins.entries.openviking.config.apiKey your-admin-or-root-key
+openclaw config set plugins.entries.openviking.config.accountId your-account-id   # ROOT key 必填
+openclaw config set plugins.entries.openviking.config.agentId your-agent-id
+```
+
+multi-user 说明：
+
+- 不要在插件配置里设置 `userId`，该字段在 `multi-user` 下不会生效。
+- 实际用户身份来自运行时 sender，并在 user message 写入时作为 session `role_id` 传给 OpenViking。
 
 ## 启动
 
