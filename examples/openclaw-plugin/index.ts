@@ -60,6 +60,8 @@ type HookAgentContext = {
   sessionId?: string;
   sessionKey?: string;
   senderId?: string;
+  requesterSenderId?: string;
+  agentAccountId?: string;
 };
 
 type SessionAgentLookup = {
@@ -102,6 +104,8 @@ type ToolContext = {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  requesterSenderId?: string;
+  agentAccountId?: string;
 };
 
 type PluginCommandContext = {
@@ -1565,7 +1569,19 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
       return sessionSenderResolver.resolve(sessionId, sessionKey, ovSessionId);
     };
     const resolveToolRequestContext = (ctx: ToolContext): RequestTenantContext | undefined =>
-      resolveRequestContext(ctx.sessionId, ctx.sessionKey);
+      resolveRequestContext(ctx.sessionId, ctx.sessionKey) ||
+      (cfg.userMode === "multi-user" &&
+      typeof ctx.requesterSenderId === "string" &&
+      ctx.requesterSenderId.trim()
+        ? {
+            userId: ctx.requesterSenderId.trim(),
+            ...((typeof ctx.agentAccountId === "string" && ctx.agentAccountId.trim())
+              ? { accountId: ctx.agentAccountId.trim() }
+              : cfg.accountId
+                ? { accountId: cfg.accountId }
+                : {}),
+          }
+        : undefined);
     const resolveCommandRequestContext = (ctx: PluginCommandContext): RequestTenantContext | undefined =>
       resolveRequestContext(ctx.sessionId, ctx.sessionKey, ctx.ovSessionId);
     const resolveAgentId = (

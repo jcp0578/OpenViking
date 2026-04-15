@@ -171,6 +171,70 @@ describe("Tool: memory_recall (registration)", () => {
     expect(props).toHaveProperty("scoreThreshold");
     expect(props).toHaveProperty("targetUri");
   });
+
+  it("routes multi-user recall with requesterSenderId from tool context", async () => {
+    const tools = new Map<string, ToolDef>();
+    const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "default" });
+      }
+      if (url.includes("/api/v1/fs/ls?")) {
+        return okResponse([]);
+      }
+      if (url.endsWith("/api/v1/search/find")) {
+        return okResponse({ memories: [], total: 0 });
+      }
+      throw new Error(`Unhandled fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    contextEnginePlugin.register({
+      pluginConfig: {
+        mode: "remote",
+        baseUrl: "http://127.0.0.1:1933",
+        userMode: "multi-user",
+        apiKey: "admin-key",
+        accountId: "cfg-account",
+        autoCapture: false,
+        autoRecall: false,
+        ingestReplyAssist: false,
+      },
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      },
+      registerTool: vi.fn((toolOrFactory: unknown) => {
+        if (typeof toolOrFactory === "function") {
+          const tool = (toolOrFactory as (ctx: Record<string, unknown>) => ToolDef)({
+            sessionId: "tool-session",
+            requesterSenderId: "alice",
+            agentAccountId: "acme",
+          });
+          tools.set(tool.name, tool);
+        } else {
+          const tool = toolOrFactory as ToolDef;
+          tools.set(tool.name, tool);
+        }
+      }),
+      registerCommand: vi.fn(),
+      registerService: vi.fn(),
+      registerContextEngine: vi.fn(),
+      on: vi.fn(),
+    } as any);
+
+    const recall = tools.get("memory_recall");
+    expect(recall).toBeDefined();
+    await recall!.execute("tool-call-1", { query: "backend" });
+
+    const searchCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith("/api/v1/search/find"));
+    expect(searchCall).toBeTruthy();
+    const headers = new Headers((searchCall?.[1] as RequestInit | undefined)?.headers);
+    expect(headers.get("X-OpenViking-Account")).toBe("acme");
+    expect(headers.get("X-OpenViking-User")).toBe("alice");
+  });
 });
 
 describe("Tool: memory_store (behavioral)", () => {
