@@ -6,12 +6,6 @@
       "label": "Mode",
       "help": "local = plugin starts OpenViking (like Claude Code); remote = use existing HTTP server"
     },
-    "serverAuthMode": {
-      "label": "Server Auth Mode",
-      "placeholder": "api_key",
-      "help": "Server-side auth mode. api_key: with apiKey send X-API-Key only and let the server derive identity from the key; without apiKey use X-OpenViking-Account/User = default/default as dev fallback. trusted: always send configured accountId/userId as tenant headers, and optionally send X-API-Key when apiKey is configured.",
-      "advanced": true
-    },
     "configPath": {
       "label": "Config path (local)",
       "placeholder": "~/.openviking/ov.conf",
@@ -30,8 +24,13 @@
     },
     "agentId": {
       "label": "Agent ID",
-      "placeholder": "default",
-      "help": "OpenViking agent suffix. default: X-OpenViking-Agent follows OpenClaw ctx.agentId directly. Non-default: X-OpenViking-Agent becomes `<ctx.agentId>_<agentId>` (sanitized to letters/digits/_/-), i.e. agentId is used as the suffix of ctx.agentId."
+      "placeholder": "random unique ID",
+      "help": "OpenViking agent identity. default: follow OpenClaw ctx.agentId. Non-default: use `<this>_<OpenClaw ctx.agentId>` (sanitized to letters/digits/_/-), so the configured value acts as a prefix."
+    },
+    "serverAuthMode": {
+      "label": "Server Auth Mode",
+      "placeholder": "api_key",
+      "help": "api_key (default): send X-API-Key when configured, otherwise dev fallback to default/default tenant headers. trusted: always send accountId/userId and optionally send apiKey when configured."
     },
     "apiKey": {
       "label": "OpenViking API Key",
@@ -41,20 +40,32 @@
     },
     "accountId": {
       "label": "Account ID",
-      "placeholder": "(derived from API key or default)",
-      "help": "In trusted mode this is sent as X-OpenViking-Account. In api_key mode it is only used for no-key dev fallback.",
+      "placeholder": "(derived from API key)",
+      "help": "Advanced option. Tenant account ID. Only needed when using root key or trusted auth mode. With a user key the server derives identity from the key.",
       "advanced": true
     },
     "userId": {
       "label": "User ID",
-      "placeholder": "(derived from API key or default)",
-      "help": "In trusted mode this is sent as X-OpenViking-User. In api_key mode it is only used for no-key dev fallback.",
+      "placeholder": "(derived from API key)",
+      "help": "Advanced option. Tenant user ID. Only needed when using root key or trusted auth mode.",
+      "advanced": true
+    },
+    "isolateUserScopeByAgent": {
+      "label": "Isolate User Scope By Agent",
+      "placeholder": "false",
+      "help": "Canonical namespace policy. false (default): user alias expands to viking://user/<user_id>/... . true: expands to viking://user/<user_id>/agent/<agent_id>/... . Must match the server-side account namespace policy.",
+      "advanced": true
+    },
+    "isolateAgentScopeByUser": {
+      "label": "Isolate Agent Scope By User",
+      "placeholder": "true",
+      "help": "Canonical namespace policy. true (default): agent alias expands to viking://agent/<agent_id>/user/<user_id>/... . false: expands to viking://agent/<agent_id>/... . Must match the server-side account namespace policy.",
       "advanced": true
     },
     "agentScopeMode": {
-      "label": "Agent Scope Mode",
+      "label": "Deprecated Agent Scope Mode",
       "placeholder": "user_agent",
-      "help": "Controls agent space isolation. user_agent: hash(userId + agentId). agent: hash(agentId). Must match server memory.agent_scope_mode.",
+      "help": "Deprecated compatibility alias for older routing. Prefer isolateUserScopeByAgent / isolateAgentScopeByUser. Mapping: user_agent => false/true, agent => false/false.",
       "advanced": true
     },
     "targetUri": {
@@ -86,6 +97,11 @@
     "autoRecall": {
       "label": "Auto-Recall",
       "help": "Inject relevant OpenViking memories into agent context"
+    },
+    "recallResources": {
+      "label": "Recall Resources",
+      "help": "Include resources (viking://resources) in auto-recall and default memory_recall search. Enables account-level shared knowledge retrieval.",
+      "advanced": true
     },
     "recallLimit": {
       "label": "Recall Limit",
@@ -167,9 +183,6 @@
       "mode": {
         "type": "string"
       },
-      "serverAuthMode": {
-        "type": "string"
-      },
       "configPath": {
         "type": "string"
       },
@@ -182,6 +195,9 @@
       "agentId": {
         "type": "string"
       },
+      "serverAuthMode": {
+        "type": "string"
+      },
       "apiKey": {
         "type": "string"
       },
@@ -190,6 +206,12 @@
       },
       "userId": {
         "type": "string"
+      },
+      "isolateUserScopeByAgent": {
+        "type": "boolean"
+      },
+      "isolateAgentScopeByUser": {
+        "type": "boolean"
       },
       "agentScopeMode": {
         "type": "string"
@@ -210,6 +232,9 @@
         "type": "number"
       },
       "autoRecall": {
+        "type": "boolean"
+      },
+      "recallResources": {
         "type": "boolean"
       },
       "recallLimit": {

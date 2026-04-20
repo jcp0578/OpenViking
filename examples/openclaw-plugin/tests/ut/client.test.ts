@@ -34,12 +34,20 @@ describe("isMemoryUri", () => {
     expect(isMemoryUri("viking://user/default/memories/item-1")).toBe(true);
   });
 
+  it("returns true for user memory URI isolated by agent", () => {
+    expect(isMemoryUri("viking://user/alice/agent/work/memories/item-1")).toBe(true);
+  });
+
   it("returns true for valid agent memory URI", () => {
     expect(isMemoryUri("viking://agent/memories/xyz")).toBe(true);
   });
 
   it("returns true for agent memory URI with space prefix", () => {
     expect(isMemoryUri("viking://agent/abc123/memories/item-2")).toBe(true);
+  });
+
+  it("returns true for agent memory URI isolated by user", () => {
+    expect(isMemoryUri("viking://agent/work/user/alice/memories/item-2")).toBe(true);
   });
 
   it("returns true for user memories root", () => {
@@ -325,13 +333,14 @@ describe("OpenVikingClient resource and skill import", () => {
   });
 });
 
-describe("OpenVikingClient tenant headers (accountId / userId)", () => {
-  it("sends configured accountId and userId in request headers when apiKey is absent", async () => {
+describe("OpenVikingClient tenant headers (advanced accountId / userId overrides)", () => {
+  it("sends configured accountId and userId in request headers for trusted flows", async () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse({ status: "ok" }));
     vi.stubGlobal("fetch", fetchMock);
 
     const client = new OpenVikingClient(
-      "http://127.0.0.1:1933", "", "agent", 5000,
+      "http://127.0.0.1:1933", "sk-test", "agent", 5000,
+      "trusted",
       "acct-123", "user-456",
     );
     await client.healthCheck();
@@ -342,12 +351,31 @@ describe("OpenVikingClient tenant headers (accountId / userId)", () => {
     expect(headers.get("X-OpenViking-User")).toBe("user-456");
   });
 
-  it("api_key mode without apiKey uses default tenant headers when account/user are empty", async () => {
+  it("keeps api_key flow with configured apiKey free of explicit tenant overrides", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse({ status: "ok" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenVikingClient(
+      "http://127.0.0.1:1933", "sk-user", "agent", 5000,
+      "api_key",
+      "", "",
+    );
+    await client.healthCheck();
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.get("X-OpenViking-Account")).toBeNull();
+    expect(headers.get("X-OpenViking-User")).toBeNull();
+    expect(headers.get("X-API-Key")).toBe("sk-user");
+  });
+
+  it("falls back to default/default in api_key dev mode when apiKey is missing", async () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse({ status: "ok" }));
     vi.stubGlobal("fetch", fetchMock);
 
     const client = new OpenVikingClient(
       "http://127.0.0.1:1933", "", "agent", 5000,
+      "api_key",
       "", "",
     );
     await client.healthCheck();
@@ -358,12 +386,13 @@ describe("OpenVikingClient tenant headers (accountId / userId)", () => {
     expect(headers.get("X-OpenViking-User")).toBe("default");
   });
 
-  it("trims whitespace from accountId and userId", async () => {
+  it("trims whitespace from trusted accountId and userId overrides", async () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse({ status: "ok" }));
     vi.stubGlobal("fetch", fetchMock);
 
     const client = new OpenVikingClient(
       "http://127.0.0.1:1933", "", "agent", 5000,
+      "trusted",
       "  acct  ", "  user  ",
     );
     await client.healthCheck();
@@ -373,116 +402,13 @@ describe("OpenVikingClient tenant headers (accountId / userId)", () => {
     expect(headers.get("X-OpenViking-Account")).toBe("acct");
     expect(headers.get("X-OpenViking-User")).toBe("user");
   });
-
-  it("sends API key when provided", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(okResponse({ status: "ok" }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const client = new OpenVikingClient(
-      "http://127.0.0.1:1933", "sk-root-key", "agent", 5000,
-      "acct-123", "user-456",
-    );
-    await client.healthCheck();
-
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    const headers = new Headers(init.headers);
-    expect(headers.get("X-API-Key")).toBe("sk-root-key");
-  });
-
-  it("does not send tenant headers when apiKey is provided", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(okResponse({ status: "ok" }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const client = new OpenVikingClient(
-      "http://127.0.0.1:1933", "sk-user-key", "agent", 5000,
-      "acct-123", "user-456",
-    );
-    await client.healthCheck();
-
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    const headers = new Headers(init.headers);
-    expect(headers.get("X-API-Key")).toBe("sk-user-key");
-    expect(headers.has("X-OpenViking-Account")).toBe(false);
-    expect(headers.has("X-OpenViking-User")).toBe(false);
-  });
-
-  it("api_key mode without apiKey falls back to default/default tenant headers", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(okResponse({ status: "ok" }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const client = new OpenVikingClient(
-      "http://127.0.0.1:1933", "", "agent", 5000,
-      "", "", undefined, "user_agent", "api_key",
-    );
-    await client.healthCheck();
-
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    const headers = new Headers(init.headers);
-    expect(headers.has("X-API-Key")).toBe(false);
-    expect(headers.get("X-OpenViking-Account")).toBe("default");
-    expect(headers.get("X-OpenViking-User")).toBe("default");
-  });
-
-  it("trusted mode sends configured tenant headers and does not send apiKey", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(okResponse({ status: "ok" }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const client = new OpenVikingClient(
-      "http://127.0.0.1:1933", "", "agent", 5000,
-      "acct-123", "user-456", undefined, "user_agent", "trusted",
-    );
-    await client.healthCheck();
-
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    const headers = new Headers(init.headers);
-    expect(headers.has("X-API-Key")).toBe(false);
-    expect(headers.get("X-OpenViking-Account")).toBe("acct-123");
-    expect(headers.get("X-OpenViking-User")).toBe("user-456");
-  });
-
-  it("trusted mode optionally sends apiKey alongside tenant headers", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(okResponse({ status: "ok" }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const client = new OpenVikingClient(
-      "http://127.0.0.1:1933", "sk-root-key", "agent", 5000,
-      "acct-123", "user-456", undefined, "user_agent", "trusted",
-    );
-    await client.healthCheck();
-
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    const headers = new Headers(init.headers);
-    expect(headers.get("X-API-Key")).toBe("sk-root-key");
-    expect(headers.get("X-OpenViking-Account")).toBe("acct-123");
-    expect(headers.get("X-OpenViking-User")).toBe("user-456");
-  });
-
-  it("trusted mode without configured tenant falls back to default/default", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(okResponse({ status: "ok" }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const client = new OpenVikingClient(
-      "http://127.0.0.1:1933", "", "agent", 5000,
-      "", "", undefined, "user_agent", "trusted",
-    );
-    await client.healthCheck();
-
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    const headers = new Headers(init.headers);
-    expect(headers.has("X-API-Key")).toBe(false);
-    expect(headers.get("X-OpenViking-Account")).toBe("default");
-    expect(headers.get("X-OpenViking-User")).toBe("default");
-  });
 });
 
-describe("OpenVikingClient agentScopeMode", () => {
-  it("user_agent mode uses userId:agentId for agent space (via find headers)", async () => {
+describe("OpenVikingClient canonical namespace policy", () => {
+  it("expands user memory alias to canonical user root by default", async () => {
     const fetchMock = vi.fn(async (url: string) => {
       if (url.endsWith("/api/v1/system/status")) {
         return okResponse({ user: "alice" });
-      }
-      if (url.includes("/api/v1/fs/ls")) {
-        return okResponse([]);
       }
       if (url.endsWith("/api/v1/search/find")) {
         return okResponse({ memories: [], total: 0 });
@@ -493,25 +419,24 @@ describe("OpenVikingClient agentScopeMode", () => {
 
     const client = new OpenVikingClient(
       "http://127.0.0.1:1933", "", "my-agent", 5000,
-      "", "", undefined, "user_agent",
+      "api_key",
+      "", "", undefined,
+      false,
+      true,
     );
-    await client.find("test query", { targetUri: "viking://agent/memories" });
+    await client.find("test query", { targetUri: "viking://user/memories" });
 
     const findCall = fetchMock.mock.calls.find((c) =>
       String(c[0]).endsWith("/api/v1/search/find"),
     )!;
     const body = JSON.parse(String((findCall[1] as RequestInit).body));
-    expect(body.target_uri).toContain("viking://agent/");
-    expect(body.target_uri).toContain("/memories");
+    expect(body.target_uri).toBe("viking://user/alice/memories");
   });
 
-  it("agent mode uses only agentId for agent space (via find headers)", async () => {
+  it("expands user memory alias to user/agent root when isolateUserScopeByAgent=true", async () => {
     const fetchMock = vi.fn(async (url: string) => {
       if (url.endsWith("/api/v1/system/status")) {
         return okResponse({ user: "alice" });
-      }
-      if (url.includes("/api/v1/fs/ls")) {
-        return okResponse([]);
       }
       if (url.endsWith("/api/v1/search/find")) {
         return okResponse({ memories: [], total: 0 });
@@ -522,98 +447,26 @@ describe("OpenVikingClient agentScopeMode", () => {
 
     const client = new OpenVikingClient(
       "http://127.0.0.1:1933", "", "my-agent", 5000,
-      "", "", undefined, "agent",
+      "api_key",
+      "", "", undefined,
+      true,
+      true,
     );
-    await client.find("test query", { targetUri: "viking://agent/memories" });
+    await client.find("test query", { targetUri: "viking://user/memories" });
 
     const findCall = fetchMock.mock.calls.find((c) =>
       String(c[0]).endsWith("/api/v1/search/find"),
     )!;
     const body = JSON.parse(String((findCall[1] as RequestInit).body));
-    expect(body.target_uri).toContain("viking://agent/");
-    expect(body.target_uri).toContain("/memories");
+    expect(body.target_uri).toBe("viking://user/alice/agent/my-agent/memories");
   });
 
-  it("user_agent and agent modes produce different agent space URIs for same agentId", async () => {
-    const capturedUris: string[] = [];
+  it("expands agent memory alias to canonical agent/user root by default", async () => {
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       if (url.endsWith("/api/v1/system/status")) {
         return okResponse({ user: "alice" });
       }
-      if (url.includes("/api/v1/fs/ls")) {
-        return okResponse([]);
-      }
       if (url.endsWith("/api/v1/search/find")) {
-        const body = JSON.parse(String(init?.body ?? "{}"));
-        capturedUris.push(body.target_uri);
-        return okResponse({ memories: [], total: 0 });
-      }
-      return okResponse({});
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    const clientUA = new OpenVikingClient(
-      "http://127.0.0.1:1933", "", "shared-agent", 5000,
-      "", "", undefined, "user_agent",
-    );
-    await clientUA.find("test", { targetUri: "viking://agent/memories" });
-
-    const clientAgent = new OpenVikingClient(
-      "http://127.0.0.1:1933", "", "shared-agent", 5000,
-      "", "", undefined, "agent",
-    );
-    await clientAgent.find("test", { targetUri: "viking://agent/memories" });
-
-    expect(capturedUris).toHaveLength(2);
-    expect(capturedUris[0]).not.toBe(capturedUris[1]);
-  });
-
-  it("user scope space is always userId regardless of agentScopeMode", async () => {
-    const capturedUris: string[] = [];
-    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-      if (url.endsWith("/api/v1/system/status")) {
-        return okResponse({ user: "alice" });
-      }
-      if (url.includes("/api/v1/fs/ls")) {
-        return okResponse([]);
-      }
-      if (url.endsWith("/api/v1/search/find")) {
-        const body = JSON.parse(String(init?.body ?? "{}"));
-        capturedUris.push(body.target_uri);
-        return okResponse({ memories: [], total: 0 });
-      }
-      return okResponse({});
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    const clientUA = new OpenVikingClient(
-      "http://127.0.0.1:1933", "", "agent", 5000,
-      "", "", undefined, "user_agent",
-    );
-    await clientUA.find("test", { targetUri: "viking://user/memories" });
-
-    const clientAgent = new OpenVikingClient(
-      "http://127.0.0.1:1933", "", "agent", 5000,
-      "", "", undefined, "agent",
-    );
-    await clientAgent.find("test", { targetUri: "viking://user/memories" });
-
-    expect(capturedUris).toHaveLength(2);
-    expect(capturedUris[0]).toBe(capturedUris[1]);
-  });
-
-  it("does not fall back to default user space when preferred user space is absent", async () => {
-    const capturedUris: string[] = [];
-    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-      if (url.endsWith("/api/v1/system/status")) {
-        return okResponse({ user: "alice" });
-      }
-      if (url.includes("/api/v1/fs/ls")) {
-        return okResponse([{ name: "default", isDir: true }, { name: "bob", isDir: true }]);
-      }
-      if (url.endsWith("/api/v1/search/find")) {
-        const body = JSON.parse(String(init?.body ?? "{}"));
-        capturedUris.push(body.target_uri);
         return okResponse({ memories: [], total: 0 });
       }
       return okResponse({});
@@ -621,11 +474,65 @@ describe("OpenVikingClient agentScopeMode", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const client = new OpenVikingClient(
-      "http://127.0.0.1:1933", "", "agent", 5000,
-      "", "", undefined, "user_agent",
+      "http://127.0.0.1:1933", "", "shared-agent", 5000,
+      "api_key",
+      "", "", undefined,
+      false,
+      true,
     );
-    await client.find("test", { targetUri: "viking://user/memories" });
+    await client.find("test", { targetUri: "viking://agent/memories" });
 
-    expect(capturedUris).toEqual(["viking://user/alice/memories"]);
+    const findCall = fetchMock.mock.calls.find((c) =>
+      String(c[0]).endsWith("/api/v1/search/find"),
+    )!;
+    const body = JSON.parse(String((findCall[1] as RequestInit).body));
+    expect(body.target_uri).toBe("viking://agent/shared-agent/user/alice/memories");
+  });
+
+  it("expands agent scope paths without user suffix when isolateAgentScopeByUser=false", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "alice" });
+      }
+      if (url.endsWith("/api/v1/search/find")) {
+        return okResponse({ memories: [], total: 0 });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenVikingClient(
+      "http://127.0.0.1:1933", "", "shared-agent", 5000,
+      "api_key",
+      "", "", undefined,
+      false,
+      false,
+    );
+    await client.find("test", { targetUri: "viking://agent/skills" });
+
+    const findCall = fetchMock.mock.calls.find((c) =>
+      String(c[0]).endsWith("/api/v1/search/find"),
+    )!;
+    const body = JSON.parse(String((findCall[1] as RequestInit).body));
+    expect(body.target_uri).toBe("viking://agent/shared-agent/skills");
+  });
+
+  it("includes role_id when addSessionMessage receives one", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse({ session_id: "s1" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 5000);
+    await client.addSessionMessage(
+      "s1",
+      "user",
+      [{ type: "text", text: "hello" }],
+      "agent",
+      "2026-04-20T00:00:00.000Z",
+      "telegram_12345",
+    );
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(String(init.body));
+    expect(body.role_id).toBe("telegram_12345");
   });
 });
