@@ -236,9 +236,11 @@ export const memoryOpenVikingConfigSchema = {
         ? cfg.userId.trim()
         : (process.env.OPENVIKING_USER_ID?.trim() || "");
 
+    const hasExplicitAgentScopeMode =
+      typeof cfg.agentScopeMode === "string" || process.env.OPENVIKING_AGENT_SCOPE_MODE !== undefined;
     const rawAgentScope = cfg.agentScopeMode ?? process.env.OPENVIKING_AGENT_SCOPE_MODE;
     const agentScopeMode =
-      rawAgentScope === "agent" ? "agent" as const : "user_agent" as const;
+      rawAgentScope === "user_agent" ? "user_agent" as const : "agent" as const;
     const explicitIsolateUserScopeByAgent =
       typeof cfg.isolateUserScopeByAgent === "boolean"
         ? cfg.isolateUserScopeByAgent
@@ -260,11 +262,11 @@ export const memoryOpenVikingConfigSchema = {
     const isolateUserScopeByAgent =
       explicitIsolateUserScopeByAgent ??
       envIsolateUserScopeByAgent ??
-      (agentScopeMode === "agent" ? false : false);
+      false;
     const isolateAgentScopeByUser =
       explicitIsolateAgentScopeByUser ??
       envIsolateAgentScopeByUser ??
-      (agentScopeMode === "agent" ? false : true);
+      (hasExplicitAgentScopeMode && agentScopeMode === "user_agent" ? true : false);
 
     return {
       mode,
@@ -405,14 +407,14 @@ export const memoryOpenVikingConfigSchema = {
     },
     isolateAgentScopeByUser: {
       label: "Isolate Agent Scope By User",
-      placeholder: "true",
-      help: "Canonical namespace policy. true (default): agent alias expands to viking://agent/<agent_id>/user/<user_id>/... . false: expands to viking://agent/<agent_id>/... . Must match the server-side account namespace policy.",
+      placeholder: "false",
+      help: "Canonical namespace policy. false (default): agent alias expands to viking://agent/<agent_id>/... . true: expands to viking://agent/<agent_id>/user/<user_id>/... . Must match the server-side account namespace policy.",
       advanced: true,
     },
     agentScopeMode: {
       label: "Deprecated Agent Scope Mode",
-      placeholder: "user_agent",
-      help: 'Deprecated compatibility alias for older hash-based routing. Prefer isolateUserScopeByAgent / isolateAgentScopeByUser. Mapping: "user_agent" => false/true, "agent" => false/false.',
+      placeholder: "agent",
+      help: 'Deprecated compatibility alias for older routing behavior. Prefer isolateUserScopeByAgent / isolateAgentScopeByUser. Mapping: explicit "user_agent" => false/true, explicit "agent" => false/false. When fully unset, the plugin defaults to false/false to match the current server-side default policy.',
       advanced: true,
     },
     targetUri: {

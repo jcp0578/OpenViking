@@ -29,7 +29,7 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.agentId).toBe("default");
     expect(cfg.serverAuthMode).toBe("api_key");
     expect(cfg.isolateUserScopeByAgent).toBe(false);
-    expect(cfg.isolateAgentScopeByUser).toBe(true);
+    expect(cfg.isolateAgentScopeByUser).toBe(false);
     expect(cfg.emitStandardDiagnostics).toBe(false);
   });
 
@@ -201,16 +201,16 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     });
     expect(cfg.accountId).toBe("");
     expect(cfg.userId).toBe("");
-    expect(cfg.agentScopeMode).toBe("user_agent");
+    expect(cfg.agentScopeMode).toBe("agent");
     expect(cfg.isolateUserScopeByAgent).toBe(false);
-    expect(cfg.isolateAgentScopeByUser).toBe(true);
+    expect(cfg.isolateAgentScopeByUser).toBe(false);
   });
 
-  it("defaults namespace policy to user root + agent-per-user root", () => {
+  it("defaults namespace policy to the current server-side false/false policy", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({});
-    expect(cfg.agentScopeMode).toBe("user_agent");
+    expect(cfg.agentScopeMode).toBe("agent");
     expect(cfg.isolateUserScopeByAgent).toBe(false);
-    expect(cfg.isolateAgentScopeByUser).toBe(true);
+    expect(cfg.isolateAgentScopeByUser).toBe(false);
   });
 
   it("maps deprecated agentScopeMode 'agent' to false/false namespace policy", () => {
@@ -222,6 +222,13 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
 
   it("falls back to user_agent for invalid agentScopeMode", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({ agentScopeMode: "invalid" });
+    expect(cfg.agentScopeMode).toBe("agent");
+    expect(cfg.isolateUserScopeByAgent).toBe(false);
+    expect(cfg.isolateAgentScopeByUser).toBe(false);
+  });
+
+  it("maps explicit deprecated agentScopeMode 'user_agent' to false/true namespace policy", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ agentScopeMode: "user_agent" });
     expect(cfg.agentScopeMode).toBe("user_agent");
     expect(cfg.isolateUserScopeByAgent).toBe(false);
     expect(cfg.isolateAgentScopeByUser).toBe(true);

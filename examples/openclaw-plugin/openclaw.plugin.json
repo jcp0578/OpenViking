@@ -58,14 +58,14 @@
     },
     "isolateAgentScopeByUser": {
       "label": "Isolate Agent Scope By User",
-      "placeholder": "true",
-      "help": "Canonical namespace policy. true (default): agent alias expands to viking://agent/<agent_id>/user/<user_id>/... . false: expands to viking://agent/<agent_id>/... . Must match the server-side account namespace policy.",
+      "placeholder": "false",
+      "help": "Canonical namespace policy. false (default): agent alias expands to viking://agent/<agent_id>/... . true: expands to viking://agent/<agent_id>/user/<user_id>/... . Must match the server-side account namespace policy.",
       "advanced": true
     },
     "agentScopeMode": {
       "label": "Deprecated Agent Scope Mode",
-      "placeholder": "user_agent",
-      "help": "Deprecated compatibility alias for older routing. Prefer isolateUserScopeByAgent / isolateAgentScopeByUser. Mapping: user_agent => false/true, agent => false/false.",
+      "placeholder": "agent",
+      "help": "Deprecated compatibility alias for older routing. Prefer isolateUserScopeByAgent / isolateAgentScopeByUser. Explicit user_agent => false/true, explicit agent => false/false. When fully unset, the plugin defaults to false/false to match the current server-side policy.",
       "advanced": true
     },
     "targetUri": {

@@ -38,6 +38,18 @@ type IngestResult = {
   ingested: boolean;
 };
 
+export function toRoleId(senderId: string | undefined): string | undefined {
+  if (!senderId) {
+    return undefined;
+  }
+  const normalized = senderId
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .replace(/_+/g, "_");
+  return normalized || undefined;
+}
+
 type IngestBatchResult = {
   ingestedCount: number;
 };
@@ -232,18 +244,6 @@ function extractRuntimeSenderId(
     }
   }
   return { found: false };
-}
-
-function toRoleId(senderId: string | undefined): string | undefined {
-  if (!senderId) {
-    return undefined;
-  }
-  const normalized = senderId
-    .trim()
-    .replace(/[^a-zA-Z0-9_-]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .replace(/_+/g, "_");
-  return normalized || undefined;
 }
 
 /** OpenClaw session UUID (path-safe on Windows). */

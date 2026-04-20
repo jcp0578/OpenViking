@@ -16,7 +16,7 @@ import type {
   CommitSessionResult,
   OVMessage,
 } from "./client.js";
-import { formatMessageFaithful } from "./context-engine.js";
+import { formatMessageFaithful, toRoleId } from "./context-engine.js";
 import {
   compileSessionPatterns,
   isTranscriptLikeIngest,
@@ -336,18 +336,6 @@ function parseImportKind(value: string | undefined): OvImportKind {
     return value;
   }
   throw new Error("--kind must be resource or skill");
-}
-
-function toRoleId(senderId: string | undefined): string | undefined {
-  if (!senderId) {
-    return undefined;
-  }
-  const normalized = senderId
-    .trim()
-    .replace(/[^a-zA-Z0-9_-]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .replace(/_+/g, "_");
-  return normalized || undefined;
 }
 
 function extractToolSenderId(ctx: unknown): string | undefined {
