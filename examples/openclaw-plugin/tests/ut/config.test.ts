@@ -14,7 +14,6 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
   it("empty object uses all defaults", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({});
     expect(cfg.mode).toBe("local");
-    expect(cfg.serverAuthMode).toBe("api_key");
     expect(cfg.port).toBe(1933);
     expect(cfg.recallLimit).toBe(6);
     expect(cfg.recallScoreThreshold).toBe(0.15);
@@ -28,6 +27,9 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.captureMaxLength).toBe(24000);
     expect(cfg.recallMaxContentChars).toBe(500);
     expect(cfg.agentId).toBe("default");
+    expect(cfg.serverAuthMode).toBe("api_key");
+    expect(cfg.isolateUserScopeByAgent).toBe(false);
+    expect(cfg.isolateAgentScopeByUser).toBe(true);
     expect(cfg.emitStandardDiagnostics).toBe(false);
   });
 
@@ -191,17 +193,52 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.userId).toBe("");
   });
 
-  it("defaults agentScopeMode to user_agent", () => {
+  it("default user-key flow does not require accountId, userId, or agentScopeMode", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      baseUrl: "http://127.0.0.1:1933",
+      apiKey: "sk-user",
+      agentId: "coding-agent",
+    });
+    expect(cfg.accountId).toBe("");
+    expect(cfg.userId).toBe("");
+    expect(cfg.agentScopeMode).toBe("user_agent");
+    expect(cfg.isolateUserScopeByAgent).toBe(false);
+    expect(cfg.isolateAgentScopeByUser).toBe(true);
+  });
+
+  it("defaults namespace policy to user root + agent-per-user root", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({});
     expect(cfg.agentScopeMode).toBe("user_agent");
+    expect(cfg.isolateUserScopeByAgent).toBe(false);
+    expect(cfg.isolateAgentScopeByUser).toBe(true);
   });
 
-  it("defaults serverAuthMode to api_key", () => {
-    const cfg = memoryOpenVikingConfigSchema.parse({});
-    expect(cfg.serverAuthMode).toBe("api_key");
+  it("maps deprecated agentScopeMode 'agent' to false/false namespace policy", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ agentScopeMode: "agent" });
+    expect(cfg.agentScopeMode).toBe("agent");
+    expect(cfg.isolateUserScopeByAgent).toBe(false);
+    expect(cfg.isolateAgentScopeByUser).toBe(false);
   });
 
-  it("accepts serverAuthMode trusted", () => {
+  it("falls back to user_agent for invalid agentScopeMode", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ agentScopeMode: "invalid" });
+    expect(cfg.agentScopeMode).toBe("user_agent");
+    expect(cfg.isolateUserScopeByAgent).toBe(false);
+    expect(cfg.isolateAgentScopeByUser).toBe(true);
+  });
+
+  it("explicit namespace policy overrides deprecated agentScopeMode", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      agentScopeMode: "agent",
+      isolateUserScopeByAgent: true,
+      isolateAgentScopeByUser: true,
+    });
+    expect(cfg.agentScopeMode).toBe("agent");
+    expect(cfg.isolateUserScopeByAgent).toBe(true);
+    expect(cfg.isolateAgentScopeByUser).toBe(true);
+  });
+
+  it("parses trusted serverAuthMode", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({ serverAuthMode: "trusted" });
     expect(cfg.serverAuthMode).toBe("trusted");
   });
@@ -209,16 +246,6 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
   it("falls back to api_key for invalid serverAuthMode", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({ serverAuthMode: "invalid" });
     expect(cfg.serverAuthMode).toBe("api_key");
-  });
-
-  it("accepts agentScopeMode 'agent'", () => {
-    const cfg = memoryOpenVikingConfigSchema.parse({ agentScopeMode: "agent" });
-    expect(cfg.agentScopeMode).toBe("agent");
-  });
-
-  it("falls back to user_agent for invalid agentScopeMode", () => {
-    const cfg = memoryOpenVikingConfigSchema.parse({ agentScopeMode: "invalid" });
-    expect(cfg.agentScopeMode).toBe("user_agent");
   });
 
   it("defaults recallResources to false", () => {
