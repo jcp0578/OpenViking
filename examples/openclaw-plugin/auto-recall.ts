@@ -61,6 +61,15 @@ export type BuildMemoryLinesOptions = {
   recallPreferAbstract: boolean;
 };
 
+function normalizeInjectedMemoryContent(content: string): string {
+  const text = String(content || "").trim();
+  if (!text) return text;
+  const match = text.match(/\n[^\n]*ChatLog:\s*\n?/);
+  if (!match || match.index == null) return text;
+  const prefix = text.slice(0, match.index).trim();
+  return prefix || text;
+}
+
 async function resolveMemoryContent(
   item: FindResultItem,
   readFn: (uri: string) => Promise<string>,
@@ -84,7 +93,7 @@ async function resolveMemoryContent(
     content = item.abstract?.trim() || item.uri;
   }
 
-  return content;
+  return normalizeInjectedMemoryContent(content);
 }
 
 export async function buildMemoryLines(

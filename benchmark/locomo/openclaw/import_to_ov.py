@@ -15,14 +15,204 @@ import argparse
 import asyncio
 import csv
 import json
+import os
 import sys
 import time
+import tomllib
 import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import openviking as ov
+import requests
+
+
+def _load_vlm_for_visual_hints():
+    from openviking_cli.utils.config import get_openviking_config
+    from openviking_cli.utils.config.vlm_config import VLMConfig
+
+    try:
+        return get_openviking_config().vlm
+    except Exception:
+        pass
+
+    candidate_paths = []
+    env_path = os.environ.get("OPENVIKING_CONFIG_FILE")
+    if env_path:
+        candidate_paths.append(Path(env_path))
+    candidate_paths.extend(
+        [
+            Path.home() / ".openviking" / "ov.conf",
+            Path("/root/.openviking/ov.conf"),
+            Path("/etc/openviking/ov.conf"),
+        ]
+    )
+
+    for path in candidate_paths:
+        if not path.exists():
+            continue
+        raw = path.read_text(encoding="utf-8")
+        try:
+            config = json.loads(raw)
+        except json.JSONDecodeError:
+            config = tomllib.loads(raw)
+        vlm_raw = config.get("vlm", {}) if isinstance(config, dict) else {}
+        if not isinstance(vlm_raw, dict) or not vlm_raw:
+            continue
+        normalized = VLMConfig.sync_provider_backend(dict(vlm_raw))
+        return VLMConfig(**normalized)
+
+    raise FileNotFoundError("Unable to load VLM config for visual hints")
+
+
+def _should_request_book_title_hint(message: Dict[str, Any]) -> bool:
+    """Return True when a message likely references a specific book cover."""
+    if not message.get("images"):
+        return False
+    text = str(message.get("text", "") or "").lower()
+    visual = "\n".join(
+        str(message.get(key, "") or "")
+        for key in ("blip_caption", "query")
+    ).lower()
+    has_specific_book_reference = (
+        "this book" in text
+        or "read" in text
+        or '"' in str(message.get("text", "") or "")
+        or "book cover" in visual
+    )
+    return has_specific_book_reference
+
+
+async def _maybe_extract_visual_hints(message: Dict[str, Any]) -> List[str]:
+    """Use VLM to infer high-confidence visual title hints from attached images."""
+    if not _should_request_book_title_hint(message):
+        return []
+
+    images = list(message.get("images") or [])
+    if not images:
+        return []
+
+    prompt = (
+        "You are extracting visible book-cover metadata from an attached image.\n"
+        "Return strict JSON with keys: title, author, confidence, reason.\n"
+        "- title: string or null\n"
+        "- author: string or null\n"
+        "- confidence: high | medium | low\n"
+        "- reason: short explanation\n"
+        "Only return a title if it is directly visible or strongly inferable from the cover image itself.\n"
+        "Do not invent titles from general conversation context alone.\n"
+        "Conversation snippet:\n"
+        f"{message.get('text', '')}\n"
+    )
+
+    try:
+        from openviking_cli.utils.llm import parse_json_from_response
+
+        image_input: Any = images[0]
+        if isinstance(image_input, str) and image_input.startswith(("http://", "https://")):
+            resp = requests.get(image_input, timeout=30)
+            resp.raise_for_status()
+            image_input = resp.content
+
+        response = await _load_vlm_for_visual_hints().get_vision_completion_async(
+            prompt=prompt,
+            images=[image_input],
+            thinking=False,
+        )
+        data = parse_json_from_response(response) or {}
+        title = str(data.get("title") or "").strip()
+        author = str(data.get("author") or "").strip()
+        confidence = str(data.get("confidence") or "").strip().lower()
+        if not title or confidence not in {"high", "medium"}:
+            return []
+
+        existing = str(message.get("text", "") or "").lower()
+        hints: List[str] = []
+        if title.lower() not in existing:
+            hints.append(f"[image_title_hint]: {title}")
+        if author and author.lower() not in existing:
+            hints.append(f"[image_author_hint]: {author}")
+        return hints
+    except Exception:
+        return []
+
+
+def ensure_account_namespace(
+    *,
+    openviking_url: str,
+    account_id: str,
+    admin_api_key: str,
+    admin_user_id: str,
+    isolate_user_scope_by_agent: bool,
+    isolate_agent_scope_by_user: bool,
+) -> Dict[str, Any]:
+    """Ensure the target account exists with the requested namespace policy.
+
+    The local benchmark script depends on this helper, but some working trees
+    do not carry the original implementation. This compatibility version keeps
+    the behavior minimal and explicit:
+    - create the account if it does not exist
+    - if it already exists, verify the namespace policy matches
+    """
+
+    headers = {
+        "Content-Type": "application/json",
+        "X-API-Key": admin_api_key,
+    }
+    payload = {
+        "account_id": account_id,
+        "admin_user_id": admin_user_id,
+        "isolate_user_scope_by_agent": isolate_user_scope_by_agent,
+        "isolate_agent_scope_by_user": isolate_agent_scope_by_user,
+    }
+
+    resp = requests.post(
+        f"{openviking_url.rstrip('/')}/api/v1/admin/accounts",
+        headers=headers,
+        json=payload,
+        timeout=30,
+    )
+    if resp.ok:
+        data = resp.json()
+        return data["result"] if isinstance(data, dict) and "result" in data else data
+
+    # Existing account is acceptable only if policy already matches.
+    status = resp.status_code
+    text = resp.text[:500]
+    if status not in (400, 409):
+        raise RuntimeError(f"ensure_account_namespace failed: http_{status} {text}")
+
+    list_resp = requests.get(
+        f"{openviking_url.rstrip('/')}/api/v1/admin/accounts",
+        headers=headers,
+        timeout=30,
+    )
+    list_resp.raise_for_status()
+    body = list_resp.json()
+    items = body.get("result") if isinstance(body, dict) else body
+    if not isinstance(items, list):
+        raise RuntimeError(f"Unexpected admin account list payload: {body}")
+
+    target = None
+    for item in items:
+        if isinstance(item, dict) and item.get("account_id") == account_id:
+            target = item
+            break
+    if target is None:
+        raise RuntimeError(f"Account {account_id} was not created and is not visible in admin list")
+
+    policy = target.get("namespace_policy") or target
+    actual_user = bool(policy.get("isolate_user_scope_by_agent"))
+    actual_agent = bool(policy.get("isolate_agent_scope_by_user"))
+    if actual_user != isolate_user_scope_by_agent or actual_agent != isolate_agent_scope_by_user:
+        raise RuntimeError(
+            "Namespace policy mismatch for account "
+            f"{account_id}: expected user_by_agent={isolate_user_scope_by_agent}, "
+            f"agent_by_user={isolate_agent_scope_by_user}; got "
+            f"user_by_agent={actual_user}, agent_by_user={actual_agent}"
+        )
+    return target
 
 
 def _get_session_number(session_key: str) -> int:
@@ -76,6 +266,7 @@ def load_locomo_data(
 def build_session_messages(
     item: Dict[str, Any],
     session_range: Optional[Tuple[int, int]] = None,
+    include_image_context: bool = False,
 ) -> List[Dict[str, Any]]:
     """Build session messages for one LoCoMo sample.
 
@@ -105,9 +296,19 @@ def build_session_messages(
         messages = []
         for idx, msg in enumerate(conv[sk]):
             speaker = msg.get("speaker", "unknown")
-            text = msg.get("text", "")
+            raw_text = str(msg.get("text", "") or "").strip()
+            if raw_text == "[]":
+                continue
             messages.append(
-                {"role": "user", "text": f"[{speaker}]: {text}", "speaker": speaker, "index": idx}
+                {
+                    "role": "user",
+                    "text": _compose_locomo_message_text(
+                        msg, include_image_context=include_image_context
+                    ),
+                    "images": list(msg.get("img_url") or []),
+                    "speaker": speaker,
+                    "index": idx,
+                }
             )
 
         sessions.append(
@@ -123,6 +324,35 @@ def build_session_messages(
         )
 
     return sessions
+
+
+def _compose_locomo_message_text(
+    msg: Dict[str, Any], *, include_image_context: bool = False
+) -> str:
+    """Compose benchmark message text.
+
+    For LoCoMo benchmark ingest we default to text-only so memory extraction is
+    not polluted by image captions/queries. Visual context remains available as
+    an explicit opt-in for targeted probes.
+    """
+    speaker = msg.get("speaker", "unknown")
+    text = str(msg.get("text", "") or "")
+    parts = [f"[{speaker}]: {text}"]
+
+    if not include_image_context:
+        return "\n".join(parts)
+
+    seen_lower = {text.strip().lower()} if text.strip() else set()
+    for label, key in (("image_caption", "blip_caption"), ("image_query", "query")):
+        value = str(msg.get(key, "") or "").strip()
+        if not value:
+            continue
+        norm = value.lower()
+        if norm in seen_lower:
+            continue
+        parts.append(f"[{label}]: {value}")
+        seen_lower.add(norm)
+    return "\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -244,9 +474,13 @@ async def viking_ingest(
     messages: List[Dict[str, Any]],
     openviking_url: str,
     session_time: Optional[str] = None,
+    api_key: Optional[str] = None,
+    account_id: Optional[str] = None,
     user_id: Optional[str] = None,
     agent_id: Optional[str] = None,
-) -> Dict[str, int]:
+    attach_images: bool = False,
+    add_visual_hints: bool = False,
+) -> Dict[str, Any]:
     """Save messages to OpenViking via OpenViking SDK client.
     Returns token usage dict with embedding and vlm token counts.
 
@@ -254,6 +488,8 @@ async def viking_ingest(
         messages: List of message dicts with role and text
         openviking_url: OpenViking service URL
         session_time: Session time string (e.g., "9:36 am on 2 April, 2023")
+        api_key: OpenViking API key for HTTP mode
+        account_id: OpenViking account id for multi-tenant HTTP mode
         user_id: User identifier for separate userspace (e.g., "conv-26")
         agent_id: Agent identifier for separate agentspace (e.g., "conv-26")
     """
@@ -267,6 +503,10 @@ async def viking_ingest(
 
     # Create client
     client_kwargs = {"url": openviking_url}
+    if api_key is not None:
+        client_kwargs["api_key"] = api_key
+    if account_id is not None:
+        client_kwargs["account"] = account_id
     if user_id is not None:
         client_kwargs["user"] = user_id
     if agent_id is not None:
@@ -287,10 +527,22 @@ async def viking_ingest(
                 msg_dt = base_datetime + timedelta(seconds=idx)
                 msg_created_at = msg_dt.isoformat()
 
+            text = msg["text"]
+            visual_hints = await _maybe_extract_visual_hints(msg) if add_visual_hints else []
+            if visual_hints:
+                text = text + "\n" + "\n".join(visual_hints)
+
+            parts = [{"type": "text", "text": text}]
+            if attach_images:
+                for image_url in msg.get("images") or []:
+                    if not image_url:
+                        continue
+                    parts.append({"type": "image_url", "image_url": {"url": image_url}})
+
             await client.add_message(
                 session_id=session_id,
                 role=msg["role"],
-                parts=[{"type": "text", "text": msg["text"]}],
+                parts=parts,
                 created_at=msg_created_at,
             )
 
@@ -322,7 +574,12 @@ async def viking_ingest(
 
         # Get trace_id from commit result
         trace_id = result.get("trace_id", "")
-        return {"token_usage": token_usage, "task_id": task_id, "trace_id": trace_id}
+        return {
+            "session_id": session_id,
+            "token_usage": token_usage,
+            "task_id": task_id,
+            "trace_id": trace_id,
+        }
 
     finally:
         await client.close()

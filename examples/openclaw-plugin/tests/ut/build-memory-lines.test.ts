@@ -130,6 +130,23 @@ describe("buildMemoryLines", () => {
 
     expect(lines[0]).toContain("[memory]");
   });
+
+  it("strips appended ChatLog content from injected abstract text", async () => {
+    const memories = [
+      makeMemory({
+        category: "events",
+        abstract:
+          "In the week before 2023-06-09, Caroline gave a speech at a school.\n2023-06-09 (Friday) ChatLog:\n[user]: raw log",
+      }),
+    ];
+    const readFn = vi.fn();
+
+    const lines = await buildMemoryLines(memories, readFn, {
+      recallPreferAbstract: true,
+    });
+
+    expect(lines[0]).toBe("- [events] In the week before 2023-06-09, Caroline gave a speech at a school.");
+  });
 });
 
 describe("buildMemoryLinesWithBudget", () => {
