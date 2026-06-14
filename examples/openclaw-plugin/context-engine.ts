@@ -1190,6 +1190,36 @@ export function createMemoryOpenVikingContextEngine(params: {
         const client = await getClient();
         const routingRef = assembleParams.sessionId ?? sessionKey ?? OVSessionId;
         const agentId = resolveAgentId(routingRef, sessionKey, OVSessionId);
+        let mainRecall: Awaited<ReturnType<typeof buildAutoRecallContext>> | null = null;
+        const promptText =
+          typeof assembleParams.prompt === "string" && assembleParams.prompt.trim()
+            ? assembleParams.prompt
+            : extractAgentMessageText(latestMessage);
+
+        if (cfg.autoRecall && promptText.trim()) {
+          const recallQuery = prepareRecallQuery(promptText);
+          if (recallQuery.query && recallQuery.query.length >= 5) {
+            if (recallQuery.truncated) {
+              logger.info(
+                `openviking: recall query truncated (` +
+                  `chars=${recallQuery.originalChars}->${recallQuery.finalChars})`,
+              );
+            }
+            try {
+              mainRecall = await buildAutoRecallContext({
+                cfg,
+                client,
+                agentId,
+                queryText: recallQuery.query,
+                logger,
+                verbose: (message) => logger.info(message),
+              });
+            } catch (err) {
+              logger.warn?.(`openviking: main assemble auto-recall failed: ${String(err)}`);
+            }
+          }
+        }
+
         const ctx = await client.getSessionContext(OVSessionId, tokenBudget, agentId);
 
         const preAbstracts = ctx?.pre_archive_abstracts ?? [];
@@ -1197,6 +1227,25 @@ export function createMemoryOpenVikingContextEngine(params: {
         const activeCount = ctx?.messages?.length ?? 0;
 
         if (!ctx || (!hasArchives && activeCount === 0)) {
+          if (mainRecall?.block) {
+            const recallOnly: AgentMessage[] = [{ role: "user", content: mainRecall.block }];
+            const estimatedTokens = roughEstimate(recallOnly);
+            diag("assemble_result", OVSessionId, {
+              passthrough: false,
+              phase: "main_auto_recall_only",
+              archiveCount: 0,
+              activeCount: 0,
+              outputMessagesCount: recallOnly.length,
+              inputTokenEstimate: originalTokens,
+              estimatedTokens,
+              autoRecallMemoryCount: mainRecall.memoryCount,
+              autoRecallTokens: mainRecall.estimatedTokens,
+              senderIdFound: sender.found,
+              senderId: sender.senderId ?? null,
+              messages: messageDigest(recallOnly),
+            });
+            return { messages: recallOnly, estimatedTokens };
+          }
           return assemblePassthrough(OVSessionId, "no_ov_data", messages, originalTokens, {
             archiveCount: 0, activeCount: 0,
           });
@@ -1216,12 +1265,35 @@ export function createMemoryOpenVikingContextEngine(params: {
         );
 
         if (sanitized.length === 0 && messages.length > 0) {
+          if (mainRecall?.block) {
+            const recallOnly: AgentMessage[] = [{ role: "user", content: mainRecall.block }];
+            const estimatedTokens = roughEstimate(recallOnly);
+            diag("assemble_result", OVSessionId, {
+              passthrough: false,
+              phase: "main_auto_recall_only_after_sanitized_empty",
+              archiveCount: preAbstracts.length,
+              activeCount,
+              outputMessagesCount: recallOnly.length,
+              inputTokenEstimate: originalTokens,
+              estimatedTokens,
+              autoRecallMemoryCount: mainRecall.memoryCount,
+              autoRecallTokens: mainRecall.estimatedTokens,
+              senderIdFound: sender.found,
+              senderId: sender.senderId ?? null,
+              messages: messageDigest(recallOnly),
+            });
+            return { messages: recallOnly, estimatedTokens };
+          }
           return assemblePassthrough(OVSessionId, "sanitized_empty", messages, originalTokens, {
             archiveCount: preAbstracts.length, activeCount,
           });
         }
 
-        const assembledTokens = roughEstimate(sanitized) + instruction.tokens;
+        const withMainRecall =
+          mainRecall?.block && !sanitized.some((message) => hasAutoRecallBlock(message))
+            ? [...sanitized, { role: "user", content: mainRecall.block }]
+            : sanitized;
+        const assembledTokens = roughEstimate(withMainRecall) + instruction.tokens;
         const tokensSaved = originalTokens - assembledTokens;
         const savingPct = originalTokens > 0 ? Math.round((tokensSaved / originalTokens) * 100) : 0;
 
@@ -1229,11 +1301,13 @@ export function createMemoryOpenVikingContextEngine(params: {
           passthrough: false,
           archiveCount: preAbstracts.length,
           activeCount,
-          outputMessagesCount: sanitized.length,
+          outputMessagesCount: withMainRecall.length,
           inputTokenEstimate: originalTokens,
           estimatedTokens: assembledTokens,
           tokensSaved,
           savingPct,
+          autoRecallMemoryCount: mainRecall?.memoryCount ?? 0,
+          autoRecallTokens: mainRecall?.estimatedTokens ?? 0,
           archiveTokens: archive.tokens,
           archiveBudget: budgets.archiveMemory,
           sessionTokens: session.tokens,
@@ -1241,11 +1315,11 @@ export function createMemoryOpenVikingContextEngine(params: {
           reservedBudget: budgets.reserved,
           senderIdFound: sender.found,
           senderId: sender.senderId ?? null,
-          messages: messageDigest(sanitized),
+          messages: messageDigest(withMainRecall),
         });
 
         return {
-          messages: sanitized,
+          messages: withMainRecall,
           estimatedTokens: assembledTokens,
           ...(instruction.text ? { systemPromptAddition: instruction.text } : {}),
         };

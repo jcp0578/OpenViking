@@ -268,6 +268,79 @@ describe("context-engine assemble()", () => {
     expect(result.systemPromptAddition).toContain("Session Context Guide");
   });
 
+  it("injects auto-recall memories during main assemble when the current prompt has matches", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ status: "ok" }),
+      }),
+    );
+    try {
+      const { engine, client } = makeEngine(
+        {
+          latest_archive_overview: "# Session Summary\nPreviously discussed game design.",
+          pre_archive_abstracts: [],
+          messages: [
+            {
+              id: "msg_main_recall",
+              role: "assistant",
+              created_at: "2026-03-24T00:00:00Z",
+              parts: [{ type: "text", text: "Stored answer from OpenViking." }],
+            },
+          ],
+          estimatedTokens: 120,
+          stats: {
+            ...makeStats(),
+            totalArchives: 1,
+            includedArchives: 1,
+            archiveTokens: 40,
+            activeTokens: 80,
+          },
+        },
+        {
+          cfgOverrides: {
+            autoRecall: true,
+            recallPreferAbstract: true,
+          },
+        },
+      );
+      client.find
+        .mockResolvedValueOnce({
+          memories: [
+            {
+              uri: "viking://user/default/memories/football-simulator",
+              level: 2,
+              category: "project",
+              abstract: "James is working on a football simulator and collecting player databases.",
+              score: 0.96,
+            },
+          ],
+          total: 1,
+        })
+        .mockResolvedValueOnce({ memories: [], total: 0 });
+
+      const result = await engine.assemble({
+        prompt: "What project is James working on in his game design course?",
+        sessionId: "session-main-recall",
+        messages: [{ role: "user", content: "fallback live message" }],
+        tokenBudget: 4096,
+      });
+
+      expect(client.find).toHaveBeenCalled();
+      const recallMessage = result.messages.find((message) =>
+        typeof message.content === "string" && message.content.includes("Source: openviking-auto-recall"),
+      );
+      expect(recallMessage).toBeTruthy();
+      expect(recallMessage?.role).toBe("user");
+      expect(String(recallMessage?.content)).toContain("football simulator");
+      expect(String(recallMessage?.content)).toContain("player databases");
+      expect(result.systemPromptAddition).toContain("Session Context Guide");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("assembles summary archive and completed tool parts into agent messages", async () => {
     const { engine, client, resolveAgentId } = makeEngine({
       latest_archive_overview: "# Session Summary\nPreviously discussed repository setup.",
