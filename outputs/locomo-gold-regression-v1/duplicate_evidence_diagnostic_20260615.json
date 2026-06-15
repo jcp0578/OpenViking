@@ -1,0 +1,239 @@
+{
+  "source": "remote gateway logs with skipped-over-budget paired to inject-detail",
+  "windows": {
+    "sample5_full_main_recall_fix_20260614h": [
+      "sample5",
+      "2026-06-14T11:34",
+      "2026-06-14T11:53"
+    ],
+    "sample6_full_main_recall_fix_repeat_20260614g": [
+      "sample6",
+      "2026-06-14T10:53",
+      "2026-06-14T11:17"
+    ],
+    "sample9_full_main_recall_fix_20260614i": [
+      "sample9",
+      "2026-06-14T12:10",
+      "2026-06-14T12:33"
+    ]
+  },
+  "summary": [
+    {
+      "run": "sample5_full_main_recall_fix_20260614h",
+      "questions": 66,
+      "candidate_entries": 396,
+      "skipped_over_budget_entries": 54,
+      "actual_injected_entries": 342,
+      "exact_uri_duplicate_entries": 0,
+      "exact_abstract_duplicate_entries": 0,
+      "event_entity_mirror_entries": 4,
+      "event_entity_mirror_prompts": 4,
+      "same_stem_same_kind_entries": 4,
+      "same_stem_same_kind_prompts": 4,
+      "near_abstract_pairs_jaccard_ge_0_72": 0,
+      "near_abstract_prompts": 0
+    },
+    {
+      "run": "sample6_full_main_recall_fix_repeat_20260614g",
+      "questions": 86,
+      "candidate_entries": 516,
+      "skipped_over_budget_entries": 71,
+      "actual_injected_entries": 445,
+      "exact_uri_duplicate_entries": 0,
+      "exact_abstract_duplicate_entries": 0,
+      "event_entity_mirror_entries": 18,
+      "event_entity_mirror_prompts": 18,
+      "same_stem_same_kind_entries": 0,
+      "same_stem_same_kind_prompts": 0,
+      "near_abstract_pairs_jaccard_ge_0_72": 2,
+      "near_abstract_prompts": 2
+    },
+    {
+      "run": "sample9_full_main_recall_fix_20260614i",
+      "questions": 78,
+      "candidate_entries": 468,
+      "skipped_over_budget_entries": 41,
+      "actual_injected_entries": 427,
+      "exact_uri_duplicate_entries": 0,
+      "exact_abstract_duplicate_entries": 0,
+      "event_entity_mirror_entries": 17,
+      "event_entity_mirror_prompts": 16,
+      "same_stem_same_kind_entries": 2,
+      "same_stem_same_kind_prompts": 2,
+      "near_abstract_pairs_jaccard_ge_0_72": 3,
+      "near_abstract_prompts": 3
+    }
+  ],
+  "examples": [
+    {
+      "run": "sample5_full_main_recall_fix_20260614h",
+      "question": "When did Andrew go rock climbing?",
+      "stem": "rock_climbing_class",
+      "items": [
+        {
+          "kind": "event_path",
+          "score": 0.5213643312454224,
+          "abstract": "On Sunday 2023-06-11, Andrew took a rock climbing class with his friends and made it to the top, calling it a fantastic and satisfying experience. The climb was tricky because he w"
+        },
+        {
+          "kind": "entity_event",
+          "score": 0.5457834601402283,
+          "abstract": "# Rock Climbing Class\n\n- Andrew took a rock climbing class with friends on Sunday 2023-06-11.\n- Andrew reached the top of the climb and described it as a fantastic experience.\n- Th"
+        }
+      ]
+    },
+    {
+      "run": "sample5_full_main_recall_fix_20260614h",
+      "question": "What outdoor activities does Andrew plan on trying after the rock climbing class?",
+      "stem": "rock_climbing_class",
+      "items": [
+        {
+          "kind": "event_path",
+          "score": 0.5378192067146301,
+          "abstract": "On Sunday 2023-06-11, Andrew took a rock climbing class with his friends and made it to the top, calling it a fantastic and satisfying experience. The climb was tricky because he w"
+        },
+        {
+          "kind": "entity_event",
+          "score": 0.5700584053993225,
+          "abstract": "# Rock Climbing Class\n\n- Andrew took a rock climbing class with friends on Sunday 2023-06-11.\n- Andrew reached the top of the climb and described it as a fantastic experience.\n- Th"
+        }
+      ]
+    },
+    {
+      "run": "sample5_full_main_recall_fix_20260614h",
+      "question": "How did Audrey calm down her dog after the leash incident?",
+      "stem": "leash_break_incident",
+      "items": [
+        {
+          "kind": "event_path",
+          "score": 0.575109601020813,
+          "abstract": "On Friday 2023-09-22, Audrey was at the park with her dogs when one pup saw something and pulled so hard the leash broke. Audrey, scared the dog might run off and get hurt, chased "
+        },
+        {
+          "kind": "entity_event",
+          "score": 0.6085377335548401,
+          "abstract": "# Leash Break Incident\n\n- On Friday 2023-09-22, Audrey was at the park with her dogs when one of her pups saw something and pulled so hard the leash broke.\n- Audrey was scared the "
+        }
+      ]
+    },
+    {
+      "run": "sample5_full_main_recall_fix_20260614h",
+      "question": "What kind of flowers does Audrey take care of?",
+      "stem": "audrey_garden",
+      "items": [
+        {
+          "kind": "event_path",
+          "score": 0.5337366461753845,
+          "abstract": "On 2023-09-24, Andrew shared a photo of flowers he was taking care of, and Audrey mentioned she has a small garden too. Her flowers are Peruvian Lilies, which she loves for the bri"
+        },
+        {
+          "kind": "entity_event",
+          "score": 0.5311236381530762,
+          "abstract": "# Audrey's Garden\n\n- Audrey has a small garden as of 2023-09-24.\n- Her flowers are Peruvian Lilies, which she loves for their bright colors and delicate petals.\n- Peruvian Lilies a"
+        }
+      ]
+    },
+    {
+      "run": "sample6_full_main_recall_fix_repeat_20260614g",
+      "question": "When did James visit Italy?",
+      "stem": "canada_trip",
+      "items": [
+        {
+          "kind": "event_path",
+          "score": 0.37987837195396423,
+          "abstract": "As of 2022-07-09, James bought air tickets to Toronto and is leaving on the evening of 2022-07-11. It will be his fourth country visited. He plans to also visit Vancouver and possi"
+        },
+        {
+          "kind": "entity_event",
+          "score": 0.36496561765670776,
+          "abstract": "# Canada Trip\n\n- James bought air tickets to Toronto and is leaving on the evening of 2022-07-11 (the day after tomorrow from 2022-07-09).\n- This is the fourth country James will v"
+        }
+      ]
+    },
+    {
+      "run": "sample6_full_main_recall_fix_repeat_20260614g",
+      "question": "Which countries has James visited?",
+      "stem": "canada_trip",
+      "items": [
+        {
+          "kind": "event_path",
+          "score": 0.414825439453125,
+          "abstract": "As of 2022-07-09, James bought air tickets to Toronto and is leaving on the evening of 2022-07-11. It will be his fourth country visited. He plans to also visit Vancouver and possi"
+        },
+        {
+          "kind": "entity_event",
+          "score": 0.3881334364414215,
+          "abstract": "# Canada Trip\n\n- James bought air tickets to Toronto and is leaving on the evening of 2022-07-11 (the day after tomorrow from 2022-07-09).\n- This is the fourth country James will v"
+        }
+      ]
+    },
+    {
+      "run": "sample6_full_main_recall_fix_repeat_20260614g",
+      "question": "When did James depart for his trip to Canada?",
+      "stem": "canada_trip",
+      "items": [
+        {
+          "kind": "event_path",
+          "score": 0.5222029685974121,
+          "abstract": "As of 2022-07-09, James bought air tickets to Toronto and is leaving on the evening of 2022-07-11. It will be his fourth country visited. He plans to also visit Vancouver and possi"
+        },
+        {
+          "kind": "entity_event",
+          "score": 0.5080959796905518,
+          "abstract": "# Canada Trip\n\n- James bought air tickets to Toronto and is leaving on the evening of 2022-07-11 (the day after tomorrow from 2022-07-09).\n- This is the fourth country James will v"
+        }
+      ]
+    },
+    {
+      "run": "sample6_full_main_recall_fix_repeat_20260614g",
+      "question": "Which country did James book tickets for in July 2022?",
+      "stem": "canada_trip",
+      "items": [
+        {
+          "kind": "event_path",
+          "score": 0.5330234169960022,
+          "abstract": "As of 2022-07-09, James bought air tickets to Toronto and is leaving on the evening of 2022-07-11. It will be his fourth country visited. He plans to also visit Vancouver and possi"
+        },
+        {
+          "kind": "entity_event",
+          "score": 0.4822961986064911,
+          "abstract": "# Canada Trip\n\n- James bought air tickets to Toronto and is leaving on the evening of 2022-07-11 (the day after tomorrow from 2022-07-09).\n- This is the fourth country James will v"
+        }
+      ]
+    },
+    {
+      "run": "sample6_full_main_recall_fix_repeat_20260614g",
+      "question": "How many days did James plan to spend on his trip in Canada?",
+      "stem": "canada_trip",
+      "items": [
+        {
+          "kind": "event_path",
+          "score": 0.4971192479133606,
+          "abstract": "As of 2022-07-09, James bought air tickets to Toronto and is leaving on the evening of 2022-07-11. It will be his fourth country visited. He plans to also visit Vancouver and possi"
+        },
+        {
+          "kind": "entity_event",
+          "score": 0.5040701031684875,
+          "abstract": "# Canada Trip\n\n- James bought air tickets to Toronto and is leaving on the evening of 2022-07-11 (the day after tomorrow from 2022-07-09).\n- This is the fourth country James will v"
+        }
+      ]
+    },
+    {
+      "run": "sample6_full_main_recall_fix_repeat_20260614g",
+      "question": "What additional country did James visit during his trip to Canada?",
+      "stem": "canada_trip",
+      "items": [
+        {
+          "kind": "event_path",
+          "score": 0.45658132433891296,
+          "abstract": "As of 2022-07-09, James bought air tickets to Toronto and is leaving on the evening of 2022-07-11. It will be his fourth country visited. He plans to also visit Vancouver and possi"
+        },
+        {
+          "kind": "entity_event",
+          "score": 0.4624882638454437,
+          "abstract": "# Canada Trip\n\n- James bought air tickets to Toronto and is leaving on the evening of 2022-07-11 (the day after tomorrow from 2022-07-09).\n- This is the fourth country James will v"
+        }
+      ]
+    }
+  ]
+}

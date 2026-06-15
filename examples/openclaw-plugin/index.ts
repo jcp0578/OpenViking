@@ -34,12 +34,14 @@ import type { ContextEngineWithCommit } from "./context-engine.js";
 import {
   buildMemoryLines,
   buildMemoryLinesWithBudget,
+  buildRecallContextBlock,
   estimateTokenCount,
   prepareRecallQuery,
 } from "./auto-recall.js";
 export {
   buildMemoryLines,
   buildMemoryLinesWithBudget,
+  buildRecallContextBlock,
   estimateTokenCount,
   prepareRecallQuery,
 };

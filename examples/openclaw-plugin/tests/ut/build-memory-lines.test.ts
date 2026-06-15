@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  buildRecallContextBlock,
   estimateTokenCount,
   buildMemoryLines,
   buildMemoryLinesWithBudget,
@@ -32,6 +33,18 @@ describe("estimateTokenCount", () => {
   it("handles long text", () => {
     const text = "a".repeat(1000);
     expect(estimateTokenCount(text)).toBe(250);
+  });
+});
+
+describe("buildRecallContextBlock", () => {
+  it("uses a compact header while preserving source and memory lines", () => {
+    const block = buildRecallContextBlock(["- [project] James is working on a football simulator."]);
+
+    expect(block).toContain("<relevant-memories>");
+    expect(block).toContain("Source: openviking-auto-recall");
+    expect(block).toContain("- [project] James is working on a football simulator.");
+    expect(block).toContain("Memories:");
+    expect(block).not.toContain("The following OpenViking memories may be relevant:");
   });
 });
 
@@ -188,6 +201,33 @@ describe("buildMemoryLinesWithBudget", () => {
 
     expect(lines).toHaveLength(1);
     expect(lines[0]).toBe("- [small] short");
+  });
+
+  it("reports memories skipped because they exceed the remaining character budget", async () => {
+    const memories = [
+      makeMemory({ uri: "viking://user/memories/too-large", abstract: "a".repeat(400), category: "large" }),
+      makeMemory({ uri: "viking://user/memories/small", abstract: "short", category: "small" }),
+    ];
+    const readFn = vi.fn();
+
+    const { skippedOverBudget } = await buildMemoryLinesWithBudget(
+      memories,
+      readFn,
+      {
+        recallPreferAbstract: true,
+        recallMaxInjectedChars: 20,
+      },
+    );
+
+    expect(skippedOverBudget).toEqual([
+      {
+        uri: "viking://user/memories/too-large",
+        category: "large",
+        contentChars: 400,
+        lineChars: 410,
+        projectedChars: 410,
+      },
+    ]);
   });
 
   it("returns no lines when no complete memory fits the character budget", async () => {

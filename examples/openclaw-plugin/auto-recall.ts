@@ -114,6 +114,14 @@ export type BuildMemoryLinesWithBudgetOptions = BuildMemoryLinesOptions & {
   recallTokenBudget?: number;
 };
 
+export type SkippedMemoryBudgetDiagnostic = {
+  uri: string;
+  category?: string;
+  contentChars: number;
+  lineChars: number;
+  projectedChars: number;
+};
+
 /**
  * Build memory lines with a character budget constraint.
  *
@@ -125,9 +133,10 @@ export async function buildMemoryLinesWithBudget(
   memories: FindResultItem[],
   readFn: (uri: string) => Promise<string>,
   options: BuildMemoryLinesWithBudgetOptions,
-): Promise<{ lines: string[]; estimatedTokens: number }> {
+): Promise<{ lines: string[]; estimatedTokens: number; skippedOverBudget: SkippedMemoryBudgetDiagnostic[] }> {
   const charBudget = options.recallMaxInjectedChars ?? options.recallTokenBudget ?? 0;
   const lines: string[] = [];
+  const skippedOverBudget: SkippedMemoryBudgetDiagnostic[] = [];
   let totalTokens = 0;
   let totalChars = 0;
 
@@ -142,6 +151,13 @@ export async function buildMemoryLinesWithBudget(
     const projectedChars = totalChars + separatorChars + line.length;
 
     if (projectedChars > charBudget) {
+      skippedOverBudget.push({
+        uri: item.uri,
+        category: item.category,
+        contentChars: content.length,
+        lineChars: line.length,
+        projectedChars,
+      });
       continue;
     }
 
@@ -152,14 +168,14 @@ export async function buildMemoryLinesWithBudget(
     totalChars = projectedChars;
   }
 
-  return { lines, estimatedTokens: totalTokens };
+  return { lines, estimatedTokens: totalTokens, skippedOverBudget };
 }
 
 export function buildRecallContextBlock(memoryLines: string[]): string {
   return [
     "<relevant-memories>",
     AUTO_RECALL_SOURCE_MARKER,
-    "The following OpenViking memories may be relevant:",
+    "Memories:",
     ...memoryLines,
     "</relevant-memories>",
   ].join("\n");
@@ -234,7 +250,7 @@ export async function buildAutoRecallContext(params: {
         return { memoryCount: 0, estimatedTokens: 0 };
       }
 
-      const { lines: memoryLines, estimatedTokens } = await buildMemoryLinesWithBudget(
+      const { lines: memoryLines, estimatedTokens, skippedOverBudget } = await buildMemoryLinesWithBudget(
         memories,
         (uri) => client.read(uri, agentId),
         {
@@ -254,6 +270,11 @@ export async function buildAutoRecallContext(params: {
       verbose?.(
         `openviking: injecting ${memoryLines.length} memories (${block.length} chars, ~${estimatedTokens} tokens, maxInjectedChars=${cfg.recallMaxInjectedChars})`,
       );
+      if (skippedOverBudget.length > 0) {
+        verbose?.(
+          `openviking: skipped-over-budget ${toJsonLog({ count: skippedOverBudget.length, memories: skippedOverBudget })}`,
+        );
+      }
       verbose?.(
         `openviking: inject-detail ${toJsonLog({ count: memories.length, memories: summarizeInjectionMemories(memories) })}`,
       );

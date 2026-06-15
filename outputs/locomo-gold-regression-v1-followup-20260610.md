@@ -8788,3 +8788,321 @@ Final conclusion for the current candidate:
 4. Token cost: not fully acceptable yet. Total tokens increased by `420855`, and token/success worsened by `964.50`.
 5. Code candidate: keep the main-assemble auto-recall fix as accuracy-positive because it fixes a generic lifecycle gap and improves complete-sample accuracy, but follow up with cost mitigation before treating it as fully production-ready.
 6. Next optimization direction: do not add query-side ranking rules. If further work is needed, optimize conservative injection selection / recall budget so the same accuracy gain is preserved with lower token cost.
+
+## 140. 2026-06-15 conservative injection selection / recall budget token reduction
+
+Record type: code candidate + valid accuracy run + invalid run clarification.
+
+Goal:
+
+Reduce the token cost introduced by main-assemble auto-recall without adding query-side ranking rules, answer normalization, or benchmark changes.
+
+Code change:
+
+| file | change |
+| --- | --- |
+| `examples/openclaw-plugin/context-engine.ts` | main assemble now calls `buildAutoRecallContext()` with a conservative injected-memory character budget cap |
+| `examples/openclaw-plugin/tests/ut/context-engine-assemble.test.ts` | added a regression test proving main assemble skips long tail recall entries while preserving the direct answer memory |
+
+Implementation:
+
+| item | value |
+| --- | --- |
+| hard-coded main-assemble cap | `MAIN_ASSEMBLE_RECALL_MAX_INJECTED_CHARS = 3000` |
+| global config behavior | unchanged |
+| transform-context recall behavior | unchanged |
+| ranking behavior | unchanged |
+| benchmark / judge behavior | unchanged |
+| answer normalization | unchanged |
+
+Why this is generic:
+
+1. It does not target a sample, qid, entity, or answer string.
+2. It keeps the existing retrieval and ranking pipeline unchanged.
+3. It only constrains how much evidence main assemble injects into the final prompt.
+4. It relies on existing `buildMemoryLinesWithBudget()` behavior: complete memories are included or skipped; individual memories are not truncated.
+
+Local verification:
+
+| command | result |
+| --- | --- |
+| `npm test -- --run tests/ut/context-engine-assemble.test.ts` | pass, `16/16` |
+| `npm test -- --run tests/ut/plugin-normal-flow-real-server.test.ts tests/ut/tools.test.ts` | pass, `47/47` |
+| `npm run typecheck` | pass |
+
+Remote runtime:
+
+| item | value |
+| --- | --- |
+| runtime file | `/root/.openclaw/extensions/openviking/context-engine.ts` |
+| runtime checksum | `0e982f09d54629f731cd870b27c9b450b43ff35878d8326c3b588a0264ed6761` |
+| OpenViking health | pass |
+| gateway health | pass |
+| minimal QA health | pass, answer `5`, `usage.total_tokens=6790` |
+
+Invalid run clarification:
+
+| run id | status | reason |
+| --- | --- | --- |
+| `sample6_q68_q98_conservative_budget_20260615a` | invalid | ran with `--no-sync-plugin-config` while gateway still had the previous sample9 `agent_prefix`, causing a namespace confound |
+
+This run produced `0/31` and `244683` tokens, but it is not valid accuracy evidence because it queried the wrong namespace. It should not be used to accept or reject the budget cap.
+
+Valid 31-question sample6 budget gate:
+
+| field | value |
+| --- | --- |
+| run id | `sample6_q68_q98_conservative_budget_3000_20260615b` |
+| sample | `sample6` |
+| qids | `68-98` |
+| question count | `31` |
+| corpus | existing populated namespace from `sample6_q68_q98_fresh_current_20260614c` |
+| ingest mode | `--skip-ingest` |
+| namespace | `user-sample6_q68_q98_fresh_current_20260614c` / `acct-sample6_q68_q98_fresh_current_20260614c` |
+| plugin config sync | enabled |
+| invalid rows | `0` |
+| local artifact | `outputs/locomo-gold-regression-v1/sample6_q68_q98_conservative_budget_3000_20260615b/` |
+
+Comparison:
+
+| version | correct | total | accuracy | total tokens | token / success | wrong qids |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| previous main-recall fix `sample6_q68_q98_main_recall_fix_20260614e` | `30` | `31` | `96.77%` | `317006` | `10566.87` | `97` |
+| conservative budget 3000 `sample6_q68_q98_conservative_budget_3000_20260615b` | `29` | `31` | `93.55%` | `257417` | `8876.45` | `89, 97` |
+| reference same qids `on_sample6_full_gold_20260610b` | `27` | `31` | `87.10%` | `252544` | `9353.48` | `68, 76, 83, 89` |
+
+Delta:
+
+| comparison | correct delta | total token delta | token / success delta |
+| --- | ---: | ---: | ---: |
+| conservative budget 3000 vs previous main-recall fix | `-1` | `-59589` (`-18.80%`) | `-1690.42` (`-16.00%`) |
+| conservative budget 3000 vs reference same qids | `+2` | `+4873` | `-477.03` |
+
+Interpretation:
+
+1. The 3000-char cap is a viable token-reduction candidate on the 31-question gate.
+2. It reduces token cost materially versus the previous main-recall fix while preserving most of the accuracy gain.
+3. It is slightly worse than the previous fix on accuracy (`30/31 -> 29/31`) because q89 regressed.
+4. It is still better than the reference on both accuracy and token/success for the same qids.
+
+Other token-reduction options considered:
+
+| option | expected benefit | risk | current decision |
+| --- | --- | --- | --- |
+| lower main-assemble injected-char cap below 3000 | larger token savings | high accuracy risk; 1200 was invalid due namespace confound and too aggressive in local behavior | do not accept yet |
+| reduce `recallLimit` only for main assemble | fewer injected memories and fewer reads | may drop answer memory when several short distractors rank above it | defer |
+| dynamic cap based on `tokenBudget` | better proportional budget use | more moving parts, harder to compare | defer |
+| compress recall block header text | small token savings | low risk but small upside | optional later |
+| truncate individual memory content | larger savings | can cut answer-bearing text and create misleading snippets | reject for now |
+| add query-side ranking rules | uncertain | overfit / regression risk already observed | reject |
+
+Current decision:
+
+1. Keep the 3000-char main-assemble cap as a candidate.
+2. Do not claim final acceptance until it passes a broader sample run.
+3. Next validation should be complete sample6, because the 31-question gate lost one qid but still reduced token cost materially.
+4. If complete sample6 remains above reference and token/success improves versus the previous main-recall full sample6 run, then expand to sample5/sample9.
+
+## 141. 2026-06-15 token reduction follow-up: reject current conservative injection candidates
+
+Record type: valid accuracy runs + rejected code candidates.
+
+This section supersedes the tentative current decision in section 140.
+
+Two conservative injection candidates were tested:
+
+1. Main-assemble total injected-memory cap reduced to `3000` chars.
+2. Main-assemble single-memory line cap at `2000` chars, while keeping total injected budget unchanged.
+
+Both were rejected after accuracy gates.
+
+### 141.1 Invalid run clarification
+
+| run id | status | reason |
+| --- | --- | --- |
+| `sample6_q68_q98_conservative_budget_20260615a` | invalid | used `--no-sync-plugin-config` while gateway still had the previous sample9 `agent_prefix`; the run queried the wrong namespace |
+
+Do not use this run as evidence for or against the budget cap.
+
+### 141.2 Main-assemble total cap 3000
+
+31-question gate:
+
+| version | correct | total | accuracy | total tokens | token / success | wrong qids |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| previous main-recall fix `sample6_q68_q98_main_recall_fix_20260614e` | `30` | `31` | `96.77%` | `317006` | `10566.87` | `97` |
+| total cap 3000 `sample6_q68_q98_conservative_budget_3000_20260615b` | `29` | `31` | `93.55%` | `257417` | `8876.45` | `89, 97` |
+| reference same qids `on_sample6_full_gold_20260610b` | `27` | `31` | `87.10%` | `252544` | `9353.48` | `68, 76, 83, 89` |
+
+Complete sample6 gate:
+
+| version | correct | total | accuracy | total tokens | token / success | wrong qids |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| total cap 3000 `sample6_full_conservative_budget_3000_20260615c` | `65` | `86` | `75.58%` | `720132` | `11078.95` | `1, 2, 5, 6, 7, 8, 11, 12, 17, 18, 20, 26, 32, 34, 37, 38, 81, 89, 97, 99, 103` |
+| previous main-recall fix repeat `sample6_full_main_recall_fix_repeat_20260614g` | `73` | `86` | `84.88%` | `869645` | `11912.95` | `1, 2, 6, 9, 12, 18, 20, 26, 32, 34, 97, 99, 103` |
+| reference `on_sample6_full_gold_20260610b` | `69` | `86` | `80.23%` | `711750` | `10315.22` | `1, 6, 12, 14, 17, 18, 20, 32, 34, 38, 68, 76, 83, 89, 102, 103, 109` |
+
+Decision:
+
+Reject. Although the 3000 cap reduces tokens, complete sample6 falls below reference accuracy (`65/86` vs `69/86`). This violates the accuracy-first goal.
+
+### 141.3 Single-memory line cap 2000
+
+31-question gate:
+
+| version | correct | total | accuracy | total tokens | token / success | wrong qids |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| single-line cap 2000 `sample6_q68_q98_conservative_linecap_20260615d` | `26` | `31` | `83.87%` | `260303` | `10011.65` | `68, 76, 89, 95, 97` |
+| previous main-recall fix `sample6_q68_q98_main_recall_fix_20260614e` | `30` | `31` | `96.77%` | `317006` | `10566.87` | `97` |
+| reference same qids `on_sample6_full_gold_20260610b` | `27` | `31` | `87.10%` | `252544` | `9353.48` | `68, 76, 83, 89` |
+
+Decision:
+
+Reject. The line cap reduces tokens but falls below the reference on the 31-question gate (`26/31` vs `27/31`), so it is not safe enough to expand.
+
+### 141.4 Code state after rejection
+
+The rejected token-reduction code was removed locally. The codebase should keep the previously committed main-assemble auto-recall fix and not keep either:
+
+1. total injected-memory cap `3000`;
+2. single-memory line cap `2000`.
+
+### 141.5 Remaining token-reduction options
+
+| option | reason to consider | risk | recommendation |
+| --- | --- | --- | --- |
+| Prompt/header compression only | very low behavioral risk | small savings | safest next code change |
+| Better evidence dedup before injection | can reduce repeated facts without lowering recall budget | needs diagnostics to avoid deleting complementary evidence | worth investigating |
+| Token-aware ordering after existing ranking | may keep answer-bearing short evidence earlier | can become query-side ranking if too strong | only if based on generic length/dedup signals |
+| Dynamic cap only when final prompt exceeds budget pressure | avoids harming normal cases | needs runtime prompt budget diagnostics | worth later |
+| Lower total cap or line cap | proven to reduce tokens | proven to hurt accuracy in current gates | reject for now |
+
+Current decision:
+
+1. Do not accept the token-reduction code candidates from this round.
+2. Keep the already committed accuracy-positive main-assemble auto-recall fix.
+3. If continuing token work, start with prompt/header compression or duplicate-evidence suppression, not hard caps.
+
+## 142. 2026-06-15 low-risk header compression
+
+Record type: code candidate + local verification.
+
+Goal:
+
+Continue token reduction without changing retrieval, ranking, budget caps, benchmark, judge, or answer normalization.
+
+Code change:
+
+| file | change |
+| --- | --- |
+| `examples/openclaw-plugin/auto-recall.ts` | compressed recall block helper text from `The following OpenViking memories may be relevant:` to `Memories:` |
+| `examples/openclaw-plugin/index.ts` | exported `buildRecallContextBlock` for focused unit coverage through the existing public test entry |
+| `examples/openclaw-plugin/tests/ut/build-memory-lines.test.ts` | added a regression test proving the compact header keeps XML tag, source marker, and memory lines |
+
+Additional cleanup:
+
+| item | result |
+| --- | --- |
+| `buildMemoryLinesWithBudget()` skipped diagnostics | restored `skippedOverBudget` return behavior expected by existing tests |
+
+Why this is safe:
+
+1. It does not change retrieval.
+2. It does not change memory ordering or memory selection.
+3. It does not lower recall budget.
+4. It does not remove any memory evidence line.
+5. It only shortens fixed prompt boilerplate.
+
+Estimated token impact:
+
+| field | value |
+| --- | ---: |
+| old header chars | `50` |
+| new header chars | `9` |
+| saved chars per injected recall block | `41` |
+| estimated saved tokens per injected recall block | about `11` |
+
+Local verification:
+
+| command | result |
+| --- | --- |
+| `npm test -- --run tests/ut/build-memory-lines.test.ts tests/ut/context-engine-assemble.test.ts` | pass, `34/34` |
+| `npm test -- --run tests/ut/plugin-normal-flow-real-server.test.ts tests/ut/tools.test.ts` | pass, `47/47` |
+| `npm run typecheck` | pass |
+
+Decision:
+
+1. Keep this as a low-risk token-reduction code candidate.
+2. Do not run a full LoCoMo sample solely for this change because the expected saving is small and the behavior is structurally unchanged.
+3. The next meaningful token-reduction work should focus on duplicate-evidence suppression, but it must first measure actual duplicate memory lines in selected prompts before changing code.
+
+## 143. 2026-06-15 duplicate-evidence suppression diagnostic
+
+Record type: token diagnostic, no production code change.
+
+Goal:
+
+Before implementing duplicate-evidence suppression, measure whether actual injected memory lines contain enough repeated evidence to justify a generic code change.
+
+Scope:
+
+| run | questions | reason |
+| --- | ---: | --- |
+| `sample5_full_main_recall_fix_20260614h` | 66 | accepted full-sample accuracy evidence |
+| `sample6_full_main_recall_fix_repeat_20260614g` | 86 | accepted repeat full-sample accuracy evidence |
+| `sample9_full_main_recall_fix_20260614i` | 78 | accepted full-sample accuracy evidence |
+| total | 230 | large enough to avoid single-question overfit |
+
+Method:
+
+1. Parsed remote gateway logs from `/tmp/openclaw/openclaw-2026-06-14.log` and `/tmp/openclaw/openclaw-2026-06-15.log`.
+2. Recovered the effective full-run windows:
+   - sample5: `2026-06-14T11:34` to `2026-06-14T11:53`;
+   - sample6 repeat: `2026-06-14T10:53` to `2026-06-14T11:17`;
+   - sample9: `2026-06-14T12:10` to `2026-06-14T12:33`.
+3. Paired `openviking: skipped-over-budget` with `openviking: inject-detail`.
+4. Counted actual injected memory lines as `inject-detail candidates - skipped-over-budget`.
+
+Diagnostic artifact:
+
+`outputs/locomo-gold-regression-v1/duplicate_evidence_diagnostic_20260615.json`
+
+Results:
+
+| run | candidate entries | skipped over budget | actual injected entries | exact URI duplicates | exact abstract duplicates | event/entity mirror entries | same-stem same-kind entries | near-abstract pairs |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| sample5 full | 396 | 54 | 342 | 0 | 0 | 4 | 4 | 0 |
+| sample6 full repeat | 516 | 71 | 445 | 0 | 0 | 18 | 0 | 2 |
+| sample9 full | 468 | 41 | 427 | 0 | 0 | 17 | 2 | 3 |
+| total | 1380 | 166 | 1214 | 0 | 0 | 39 | 6 | 5 |
+
+Aggregate interpretation:
+
+| metric | value |
+| --- | ---: |
+| exact URI duplicate rate | `0 / 1214 = 0.00%` |
+| exact abstract duplicate rate | `0 / 1214 = 0.00%` |
+| event/entity mirror entry rate | `39 / 1214 = 3.21%` |
+| same-stem same-kind entry rate | `6 / 1214 = 0.49%` |
+| prompts with event/entity mirror | `38 / 230 = 16.52%` |
+
+Typical duplicate-like cases:
+
+| type | example | interpretation |
+| --- | --- | --- |
+| event/entity mirror | `events/.../rock_climbing_class.md` plus `entities/event/rock_climbing_class.md` | likely repeated evidence, but the entity/event summary can be cleaner than the raw event memory |
+| event/entity mirror | `events/.../canada_trip.md` plus `entities/event/canada_trip.md` | duplicate-like, but may preserve normalized relative-time wording |
+| same-stem same-kind | `events/2023/04/02/dog_friendly_housing_search.md` plus `events/2023/09/06/dog_friendly_housing_search.md` | not safe to suppress by stem because these are different dates/facts |
+| near abstract | `events/.../metal_detecting.md` plus `entities/hobby/metal_detecting.md` | duplicate-like, but only a few cases across 230 questions |
+
+Decision:
+
+1. Do not implement production duplicate-evidence suppression yet.
+2. The measured exact duplication is zero, so a hard duplicate remover has no meaningful effect.
+3. Event/entity mirror suppression has a theoretical maximum saving of only about `3.21%` of injected memory lines in these accepted runs.
+4. Suppressing event/entity mirrors is not obviously safe because the entity/event memory often contains a cleaner normalized summary than the event memory.
+5. Same-stem same-kind suppression is unsafe because same slug can represent different dates or different facts.
+
+Next token-reduction direction:
+
+If token work continues, prefer a diagnostic-only or guarded prototype that logs which event/entity mirror would be removed and whether the retained line still contains the answer-bearing evidence. Do not apply suppression in production unless a focused A/B shows token reduction without hurting at least the 230-question sample5/6/9 full-run accuracy gate.
