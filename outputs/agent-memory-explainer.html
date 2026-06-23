@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent 记忆系统：为什么重要，数据库能做什么</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --card: #1a1d2e;
+    --accent: #6c5ce7;
+    --accent2: #00cec9;
+    --red: #ff6b6b;
+    --green: #51cf66;
+    --orange: #ffa502;
+    --text: #e2e8f0;
+    --dim: #8892b0;
+    --border: #2d3148;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.8;
+    overflow-x: hidden;
+  }
+
+  /* ===== Hero ===== */
+  .hero {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 2rem;
+    position: relative;
+    overflow: hidden;
+  }
+  .hero::before {
+    content: '';
+    position: absolute;
+    width: 600px; height: 600px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(108,92,231,0.15), transparent 70%);
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+  }
+  .hero h1 {
+    font-size: clamp(2rem, 5vw, 3.5rem);
+    font-weight: 800;
+    margin-bottom: 1rem;
+    position: relative;
+  }
+  .hero h1 span { color: var(--accent); }
+  .hero p {
+    font-size: 1.25rem;
+    color: var(--dim);
+    max-width: 600px;
+    margin-bottom: 2.5rem;
+    position: relative;
+  }
+  .scroll-hint {
+    position: relative;
+    animation: bounce 2s infinite;
+    font-size: 1.5rem;
+    color: var(--dim);
+  }
+  @keyframes bounce {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(10px); }
+  }
+
+  /* ===== Section common ===== */
+  section {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 5rem 2rem;
+  }
+  .section-title {
+    font-size: 2rem;
+    font-weight: 700;
+    text-align: center;
+    margin-bottom: 1rem;
+  }
+  .section-sub {
+    text-align: center;
+    color: var(--dim);
+    font-size: 1.1rem;
+    margin-bottom: 3rem;
+    max-width: 700px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  /* ===== Scene: conversation comparison ===== */
+  .scene-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2rem;
+    margin-bottom: 2rem;
+  }
+  @media (max-width: 768px) {
+    .scene-grid { grid-template-columns: 1fr; }
+  }
+  .scene-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 2rem;
+    position: relative;
+    overflow: hidden;
+  }
+  .scene-card.bad { border-top: 3px solid var(--red); }
+  .scene-card.good { border-top: 3px solid var(--green); }
+  .scene-label {
+    display: inline-block;
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 0.25rem 0.75rem;
+    border-radius: 20px;
+    margin-bottom: 1.25rem;
+  }
+  .bad .scene-label { background: rgba(255,107,107,0.15); color: var(--red); }
+  .good .scene-label { background: rgba(81,207,102,0.15); color: var(--green); }
+
+  .chat { margin-top: 0.5rem; }
+  .chat .msg {
+    display: flex;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+    align-items: flex-start;
+  }
+  .chat .avatar {
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
+    flex-shrink: 0;
+  }
+  .chat .avatar.user { background: #2d3a5c; }
+  .chat .avatar.agent { background: #3b2d5c; }
+  .chat .bubble {
+    background: #252840;
+    padding: 0.6rem 1rem;
+    border-radius: 12px;
+    font-size: 0.92rem;
+    line-height: 1.6;
+    max-width: 85%;
+  }
+  .chat .bubble.dim { color: var(--dim); font-style: italic; }
+  .scene-verdict {
+    margin-top: 1.5rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--border);
+    font-size: 0.95rem;
+    color: var(--dim);
+  }
+  .scene-verdict strong { color: var(--text); }
+
+  /* ===== Pain points ===== */
+  .pain-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1.5rem;
+    margin-top: 2rem;
+  }
+  .pain-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 1.75rem;
+    text-align: center;
+    transition: transform 0.2s, border-color 0.2s;
+  }
+  .pain-card:hover {
+    transform: translateY(-4px);
+    border-color: var(--accent);
+  }
+  .pain-icon { font-size: 2.5rem; margin-bottom: 0.75rem; }
+  .pain-card h3 { font-size: 1.1rem; margin-bottom: 0.5rem; }
+  .pain-card p { font-size: 0.9rem; color: var(--dim); }
+
+  /* ===== Analogy ===== */
+  .analogy-section {
+    background: linear-gradient(135deg, #1a1040, #0f1117);
+    border-radius: 24px;
+    padding: 3rem 2.5rem;
+    margin: 3rem 0;
+    border: 1px solid #2a2055;
+  }
+  .analogy-flex {
+    display: flex;
+    gap: 3rem;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .analogy-diagram {
+    flex: 1;
+    min-width: 300px;
+    text-align: center;
+  }
+  .analogy-text {
+    flex: 1;
+    min-width: 280px;
+  }
+  .analogy-text h3 { font-size: 1.5rem; margin-bottom: 1rem; }
+  .analogy-text p { color: var(--dim); margin-bottom: 0.75rem; }
+  .analogy-text .highlight { color: var(--accent2); font-weight: 600; }
+
+  /* brain diagram */
+  .brain-diagram {
+    position: relative;
+    width: 280px;
+    height: 280px;
+    margin: 0 auto;
+  }
+  .brain-core {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: 100px; height: 100px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 2.2rem;
+    box-shadow: 0 0 40px rgba(108,92,231,0.3);
+    z-index: 2;
+  }
+  .brain-ring {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    border-radius: 50%;
+    border: 1.5px dashed var(--border);
+  }
+  .brain-ring.r1 { width: 180px; height: 180px; }
+  .brain-ring.r2 { width: 260px; height: 260px; animation: spin 30s linear infinite; }
+  @keyframes spin { to { transform: translate(-50%, -50%) rotate(360deg); } }
+  .brain-node {
+    position: absolute;
+    width: 44px; height: 44px;
+    border-radius: 50%;
+    background: var(--card);
+    border: 1.5px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+  }
+  .brain-node.n1 { top: 5px; left: 50%; transform: translateX(-50%); }
+  .brain-node.n2 { bottom: 5px; left: 50%; transform: translateX(-50%); }
+  .brain-node.n3 { top: 50%; left: 5px; transform: translateY(-50%); }
+  .brain-node.n4 { top: 50%; right: 5px; transform: translateY(-50%); }
+  .brain-node.n5 { top: 18%; right: 12%; }
+  .brain-node.n6 { bottom: 18%; left: 12%; }
+
+  /* ===== Flow: how memory works ===== */
+  .flow-container {
+    position: relative;
+    padding: 2rem 0;
+  }
+  .flow-line {
+    position: absolute;
+    left: 50%;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: linear-gradient(to bottom, transparent, var(--accent), var(--accent2), transparent);
+  }
+  @media (max-width: 768px) {
+    .flow-line { left: 24px; }
+  }
+  .flow-step {
+    display: flex;
+    align-items: flex-start;
+    gap: 2rem;
+    margin-bottom: 3rem;
+    position: relative;
+  }
+  .flow-step:nth-child(odd) { flex-direction: row; }
+  .flow-step:nth-child(even) { flex-direction: row-reverse; }
+  @media (max-width: 768px) {
+    .flow-step, .flow-step:nth-child(even) { flex-direction: row; }
+  }
+  .flow-dot {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: 3px solid var(--bg);
+    z-index: 2;
+  }
+  @media (max-width: 768px) {
+    .flow-dot { left: 24px; }
+  }
+  .flow-content {
+    width: 42%;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 1.5rem;
+  }
+  .flow-step:nth-child(odd) .flow-content { margin-left: auto; margin-right: 8%; }
+  .flow-step:nth-child(even) .flow-content { margin-right: auto; margin-left: 8%; }
+  @media (max-width: 768px) {
+    .flow-content,
+    .flow-step:nth-child(odd) .flow-content,
+    .flow-step:nth-child(even) .flow-content {
+      width: calc(100% - 56px);
+      margin-left: 56px;
+      margin-right: 0;
+    }
+  }
+  .flow-content .step-icon { font-size: 1.8rem; margin-bottom: 0.5rem; }
+  .flow-content h3 { font-size: 1.1rem; margin-bottom: 0.5rem; }
+  .flow-content p { font-size: 0.9rem; color: var(--dim); }
+  .flow-content .db-tag {
+    display: inline-block;
+    margin-top: 0.75rem;
+    font-size: 0.78rem;
+    padding: 0.2rem 0.6rem;
+    border-radius: 6px;
+    background: rgba(0,206,201,0.1);
+    color: var(--accent2);
+    border: 1px solid rgba(0,206,201,0.2);
+  }
+
+  /* ===== DB role section ===== */
+  .db-role-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 1rem;
+    margin: 2rem 0;
+  }
+  .db-role-item {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.25rem;
+    text-align: center;
+    transition: transform 0.2s;
+  }
+  .db-role-item:hover { transform: translateY(-3px); }
+  .db-role-item .role-icon { font-size: 2rem; margin-bottom: 0.5rem; }
+  .db-role-item .role-word {
+    font-size: 1.3rem;
+    font-weight: 700;
+    margin-bottom: 0.25rem;
+  }
+  .db-role-item .role-desc {
+    font-size: 0.8rem;
+    color: var(--dim);
+    line-height: 1.5;
+  }
+
+  /* ===== Comparison table ===== */
+  .compare-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    margin: 2rem 0;
+    border-radius: 14px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+  }
+  .compare-table th,
+  .compare-table td {
+    padding: 1rem 1.25rem;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+  .compare-table thead th {
+    background: #1e2140;
+    font-weight: 700;
+    font-size: 0.95rem;
+  }
+  .compare-table thead th:first-child { width: 28%; }
+  .compare-table tbody tr:last-child td { border-bottom: none; }
+  .compare-table tbody td { font-size: 0.9rem; }
+  .compare-table tbody td:first-child { color: var(--dim); font-weight: 500; }
+  .compare-table .col-bad { background: rgba(255,107,107,0.04); }
+  .compare-table .col-good { background: rgba(81,207,102,0.04); }
+  .compare-table .tag-bad {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    background: rgba(255,107,107,0.12);
+    color: var(--red);
+    font-size: 0.82rem;
+  }
+  .compare-table .tag-good {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    background: rgba(81,207,102,0.12);
+    color: var(--green);
+    font-size: 0.82rem;
+  }
+
+  /* ===== Final CTA ===== */
+  .cta-section {
+    text-align: center;
+    padding: 5rem 2rem;
+  }
+  .cta-section h2 {
+    font-size: 2rem;
+    margin-bottom: 1rem;
+  }
+  .cta-section p {
+    color: var(--dim);
+    font-size: 1.1rem;
+    max-width: 650px;
+    margin: 0 auto 2rem;
+  }
+  .cta-formula {
+    display: inline-flex;
+    align-items: center;
+    gap: 1rem;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 1.25rem 2.5rem;
+    font-size: 1.3rem;
+    font-weight: 700;
+  }
+  .cta-formula .plus { color: var(--dim); }
+  .cta-formula .eq { color: var(--accent); }
+  .cta-formula .result { color: var(--accent2); }
+
+  /* ===== Footer ===== */
+  footer {
+    text-align: center;
+    padding: 2rem;
+    color: var(--dim);
+    font-size: 0.8rem;
+    border-top: 1px solid var(--border);
+  }
+</style>
+</head>
+<body>
+
+<!-- ==================== Hero ==================== -->
+<div class="hero">
+  <h1>Agent 有了<span>记忆</span>，才算真的智能</h1>
+  <p>没有记忆的 AI 像金鱼，每次对话都从零开始。<br>记忆系统让 Agent 认识你、记住你、越来越懂你。</p>
+  <div class="scroll-hint">向下滑动 ↓</div>
+</div>
+
+<!-- ==================== Scene 1: The Pain ==================== -->
+<section>
+  <h2 class="section-title">先看一个场景</h2>
+  <p class="section-sub">同一个用户，跟 Agent 的第 10 次对话</p>
+
+  <div class="scene-grid">
+    <!-- Without memory -->
+    <div class="scene-card bad">
+      <div class="scene-label">没有记忆的 Agent</div>
+      <div class="chat">
+        <div class="msg">
+          <div class="avatar user">👤</div>
+          <div class="bubble">帮我订明天去上海的机票，老规矩。</div>
+        </div>
+        <div class="msg">
+          <div class="avatar agent">🤖</div>
+          <div class="bubble">好的！请问您从哪个城市出发？偏好什么时间？经济舱还是商务舱？靠窗还是靠过道？需要买保险吗？……</div>
+        </div>
+        <div class="msg">
+          <div class="avatar user">👤</div>
+          <div class="bubble dim">（又问一遍……我上周刚告诉过它）</div>
+        </div>
+      </div>
+      <div class="scene-verdict">
+        <strong>每次都像第一次见面。</strong><br>
+        用户反复回答同样的问题，耐心耗尽，体验极差。
+      </div>
+    </div>
+
+    <!-- With memory -->
+    <div class="scene-card good">
+      <div class="scene-label">有记忆的 Agent</div>
+      <div class="chat">
+        <div class="msg">
+          <div class="avatar user">👤</div>
+          <div class="bubble">帮我订明天去上海的机票，老规矩。</div>
+        </div>
+        <div class="msg">
+          <div class="avatar agent">🤖</div>
+          <div class="bubble">好的！已为您查询明天北京→上海的航班。按您的偏好筛选了：早班、经济舱、靠窗。有两个选项，您看哪个合适？</div>
+        </div>
+        <div class="msg">
+          <div class="avatar user">👤</div>
+          <div class="bubble dim">（它记住了！一句话搞定）</div>
+        </div>
+      </div>
+      <div class="scene-verdict">
+        <strong>像一个真正认识你的助手。</strong><br>
+        记住偏好、跳过废话、直达结果。越用越懂你。
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== The Problems ==================== -->
+<section>
+  <h2 class="section-title">没有记忆，Agent 会怎样？</h2>
+  <p class="section-sub">不只是"多问几句"的问题——没有记忆的 Agent 有四大硬伤</p>
+
+  <div class="pain-grid">
+    <div class="pain-card">
+      <div class="pain-icon">🔄</div>
+      <h3>反复提问</h3>
+      <p>每次对话都要重新收集信息，用户被迫当复读机</p>
+    </div>
+    <div class="pain-card">
+      <div class="pain-icon">🧊</div>
+      <h3>无法成长</h3>
+      <p>上次犯的错，下次照犯。不会从经验中学习</p>
+    </div>
+    <div class="pain-card">
+      <div class="pain-icon">🫥</div>
+      <h3>千人一面</h3>
+      <p>对所有用户说一样的话，无法个性化服务</p>
+    </div>
+    <div class="pain-card">
+      <div class="pain-icon">🧩</div>
+      <h3>前后矛盾</h3>
+      <p>上午说的和下午说的对不上，因为它根本不记得上午说过什么</p>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== Analogy ==================== -->
+<section>
+  <div class="analogy-section">
+    <div class="analogy-flex">
+      <div class="analogy-diagram">
+        <div class="brain-diagram">
+          <div class="brain-core">🧠</div>
+          <div class="brain-ring r1"></div>
+          <div class="brain-ring r2"></div>
+          <div class="brain-node n1">👤</div>
+          <div class="brain-node n2">🛠</div>
+          <div class="brain-node n3">📋</div>
+          <div class="brain-node n4">💡</div>
+          <div class="brain-node n5">⚠️</div>
+          <div class="brain-node n6">📅</div>
+        </div>
+      </div>
+      <div class="analogy-text">
+        <h3>记忆之于 Agent，就像大脑之于人</h3>
+        <p>人靠大脑记住<span class="highlight">你是谁</span>（👤 用户画像）、<span class="highlight">你喜欢什么</span>（💡 偏好）、<span class="highlight">之前发生了什么</span>（📅 事件）、<span class="highlight">怎么做更好</span>（🛠 经验）。</p>
+        <p>Agent 的记忆系统做的是同样的事：从对话中<span class="highlight">提取</span>关键信息，<span class="highlight">存储</span>起来，下次需要时<span class="highlight">想起来</span>。</p>
+        <p>那这些记忆存在哪？靠什么找回来？</p>
+        <p style="color: var(--accent2); font-size: 1.2rem; font-weight: 700; margin-top: 0.5rem;">答案是：数据库。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== How memory works ==================== -->
+<section>
+  <h2 class="section-title">记忆系统怎么工作？</h2>
+  <p class="section-sub">从"用户说了一句话"到"Agent 想起了相关记忆"，中间发生了什么</p>
+
+  <div class="flow-container">
+    <div class="flow-line"></div>
+
+    <div class="flow-step">
+      <div class="flow-dot"></div>
+      <div class="flow-content">
+        <div class="step-icon">💬</div>
+        <h3>用户和 Agent 对话</h3>
+        <p>"我下周要去上海出差，帮我看看航班。对了，我只坐早班，经济舱就行，靠窗。"</p>
+      </div>
+    </div>
+
+    <div class="flow-step">
+      <div class="flow-dot"></div>
+      <div class="flow-content">
+        <div class="step-icon">🔍</div>
+        <h3>提取关键信息</h3>
+        <p>Agent 识别出这段话里有值得记住的东西：出行偏好 = 早班 + 经济舱 + 靠窗</p>
+      </div>
+    </div>
+
+    <div class="flow-step">
+      <div class="flow-dot"></div>
+      <div class="flow-content">
+        <div class="step-icon">💾</div>
+        <h3>存入记忆</h3>
+        <p>把这条偏好信息转化为可检索的格式（文本 + 向量 + 标签），写入数据库</p>
+        <div class="db-tag">数据库：存储</div>
+      </div>
+    </div>
+
+    <div class="flow-step">
+      <div class="flow-dot"></div>
+      <div class="flow-content">
+        <div class="step-icon">⏳</div>
+        <h3>时间流逝……</h3>
+        <p>过了一周、一个月。用户又来了。</p>
+      </div>
+    </div>
+
+    <div class="flow-step">
+      <div class="flow-dot"></div>
+      <div class="flow-content">
+        <div class="step-icon">🎯</div>
+        <h3>精准召回</h3>
+        <p>用户说"帮我订机票"，Agent 从数据库中找到这条偏好记忆，自动填入</p>
+        <div class="db-tag">数据库：检索 + 排序</div>
+      </div>
+    </div>
+
+    <div class="flow-step">
+      <div class="flow-dot"></div>
+      <div class="flow-content">
+        <div class="step-icon">✨</div>
+        <h3>智能回复</h3>
+        <p>"已按您的偏好查询了早班、经济舱、靠窗的航班。" 一句话搞定。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== DB's Role ==================== -->
+<section>
+  <h2 class="section-title">数据库在记忆系统里扮演什么角色？</h2>
+  <p class="section-sub">如果把记忆系统比作人的大脑，数据库就是大脑的底层基础设施——负责存、找、管、护</p>
+
+  <div class="db-role-grid">
+    <div class="db-role-item">
+      <div class="role-icon">📦</div>
+      <div class="role-word">存</div>
+      <div class="role-desc">海量记忆<br>安全落盘</div>
+    </div>
+    <div class="db-role-item">
+      <div class="role-icon">🔎</div>
+      <div class="role-word">找</div>
+      <div class="role-desc">毫秒级<br>精准召回</div>
+    </div>
+    <div class="db-role-item">
+      <div class="role-icon">✍️</div>
+      <div class="role-word">写</div>
+      <div class="role-desc">高频写入<br>不丢不重</div>
+    </div>
+    <div class="db-role-item">
+      <div class="role-icon">🔄</div>
+      <div class="role-word">管</div>
+      <div class="role-desc">冷热分层<br>自动淘汰</div>
+    </div>
+    <div class="db-role-item">
+      <div class="role-icon">🏛️</div>
+      <div class="role-word">治</div>
+      <div class="role-desc">多租户隔离<br>资源配额</div>
+    </div>
+    <div class="db-role-item">
+      <div class="role-icon">🛡️</div>
+      <div class="role-word">安</div>
+      <div class="role-desc">加密脱敏<br>防泄防毒</div>
+    </div>
+    <div class="db-role-item">
+      <div class="role-icon">💰</div>
+      <div class="role-word">省</div>
+      <div class="role-desc">按需分配<br>降本增效</div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== Comparison Table ==================== -->
+<section>
+  <h2 class="section-title">有 vs 没有：全面对比</h2>
+  <p class="section-sub">记忆系统（以及背后的数据库能力）给 Agent 带来的全方位变化</p>
+
+  <table class="compare-table">
+    <thead>
+      <tr>
+        <th>维度</th>
+        <th class="col-bad">没有记忆的 Agent</th>
+        <th class="col-good">有记忆的 Agent</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>用户体验</td>
+        <td class="col-bad"><span class="tag-bad">每次重来</span> 反复确认基本信息</td>
+        <td class="col-good"><span class="tag-good">无感衔接</span> 上次聊到哪，接着来</td>
+      </tr>
+      <tr>
+        <td>个性化</td>
+        <td class="col-bad"><span class="tag-bad">千人一面</span> 所有人得到相同回答</td>
+        <td class="col-good"><span class="tag-good">千人千面</span> 根据你的习惯定制回答</td>
+      </tr>
+      <tr>
+        <td>准确性</td>
+        <td class="col-bad"><span class="tag-bad">上下文丢失</span> 对话超过窗口就遗忘</td>
+        <td class="col-good"><span class="tag-good">长期一致</span> 三个月前的约定也记得</td>
+      </tr>
+      <tr>
+        <td>效率</td>
+        <td class="col-bad"><span class="tag-bad">5 轮对话</span> 才能开始干活</td>
+        <td class="col-good"><span class="tag-good">1 轮对话</span> 直接给出结果</td>
+      </tr>
+      <tr>
+        <td>学习能力</td>
+        <td class="col-bad"><span class="tag-bad">不会成长</span> 同一个错误反复犯</td>
+        <td class="col-good"><span class="tag-good">持续进化</span> 从错误中学习、改进</td>
+      </tr>
+      <tr>
+        <td>多轮协作</td>
+        <td class="col-bad"><span class="tag-bad">只能单次</span> 复杂任务无法拆分到多天</td>
+        <td class="col-good"><span class="tag-good">跨会话</span> 今天做一半，明天接着做</td>
+      </tr>
+      <tr>
+        <td>安全合规</td>
+        <td class="col-bad"><span class="tag-bad">无法管控</span> 信息散落在对话日志里</td>
+        <td class="col-good"><span class="tag-good">可控可审</span> 记忆可加密、可删除、可审计</td>
+      </tr>
+      <tr>
+        <td>成本</td>
+        <td class="col-bad"><span class="tag-bad">重复消耗</span> 每次都要传完整上下文给 LLM</td>
+        <td class="col-good"><span class="tag-good">精准投喂</span> 只传相关记忆，省 Token 省钱</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ==================== Final ==================== -->
+<section class="cta-section">
+  <h2>一个公式</h2>
+  <p>Agent 的智能上限，不取决于模型多聪明，而取决于它能记住多少、想起什么。</p>
+  <div class="cta-formula">
+    <span>🧠 大模型</span>
+    <span class="plus">+</span>
+    <span>💾 记忆系统</span>
+    <span class="plus">+</span>
+    <span>🗄️ 数据库</span>
+    <span class="eq">=</span>
+    <span class="result">真正的智能 Agent</span>
+  </div>
+  <p style="margin-top: 2rem; font-size: 0.95rem;">
+    大模型负责"思考"，记忆系统负责"记住"，数据库负责"存好、找准、管住、护牢"。<br>
+    三者缺一不可。
+  </p>
+</section>
+
+<footer>
+  Agent Memory System Explainer &middot; OpenViking
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,901 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent 记忆系统流程标注稿</title>
+<style>
+  :root {
+    --bg: #eef3f8;
+    --panel: #ffffff;
+    --panel-soft: #f7fafc;
+    --line: #cfd8e3;
+    --line-strong: #8aa0b8;
+    --text: #183046;
+    --muted: #5f7388;
+    --blue: #2f6fed;
+    --teal: #1f9d8b;
+    --orange: #d9862a;
+    --red: #cc5b50;
+    --note: #fff4d6;
+    --note-line: #e6c470;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    margin: 0;
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background:
+      radial-gradient(circle at top left, rgba(47, 111, 237, 0.06), transparent 28%),
+      radial-gradient(circle at top right, rgba(31, 157, 139, 0.08), transparent 24%),
+      var(--bg);
+    color: var(--text);
+  }
+
+  .page {
+    max-width: 1480px;
+    margin: 0 auto;
+    padding: 32px 28px 48px;
+  }
+
+  .hero {
+    background: linear-gradient(135deg, #ffffff 0%, #f6f9fd 100%);
+    border: 1px solid var(--line);
+    border-radius: 24px;
+    padding: 28px 32px;
+    margin-bottom: 24px;
+    box-shadow: 0 12px 36px rgba(24, 48, 70, 0.06);
+  }
+
+  .hero h1 {
+    margin: 0 0 8px;
+    font-size: 34px;
+    line-height: 1.2;
+  }
+
+  .hero p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 16px;
+  }
+
+  .layout {
+    display: grid;
+    grid-template-columns: minmax(880px, 1fr) 340px;
+    gap: 24px;
+    align-items: start;
+  }
+
+  .canvas {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 24px;
+    padding: 28px;
+    box-shadow: 0 12px 36px rgba(24, 48, 70, 0.05);
+  }
+
+  .sidebar {
+    position: sticky;
+    top: 20px;
+    display: grid;
+    gap: 16px;
+  }
+
+  .side-card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    padding: 18px 18px 16px;
+    box-shadow: 0 10px 30px rgba(24, 48, 70, 0.05);
+  }
+
+  .side-card h3 {
+    margin: 0 0 10px;
+    font-size: 18px;
+  }
+
+  .side-card p,
+  .side-card li {
+    color: var(--muted);
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  .side-card ul {
+    margin: 0;
+    padding-left: 18px;
+  }
+
+  .section {
+    border: 1px solid var(--line);
+    border-radius: 20px;
+    background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+    padding: 22px 20px 20px;
+  }
+
+  .section + .section {
+    margin-top: 22px;
+  }
+
+  .section-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    align-items: end;
+    margin-bottom: 18px;
+  }
+
+  .section-kicker {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: var(--blue);
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+
+  .section-title {
+    margin: 0;
+    font-size: 24px;
+  }
+
+  .section-sub {
+    color: var(--muted);
+    font-size: 14px;
+    max-width: 420px;
+  }
+
+  .flow-note {
+    padding: 10px 14px;
+    border: 1px solid rgba(47, 111, 237, 0.15);
+    background: rgba(47, 111, 237, 0.05);
+    color: var(--blue);
+    border-radius: 999px;
+    font-size: 13px;
+    white-space: nowrap;
+  }
+
+  .native-stage {
+    position: relative;
+    padding-top: 52px;
+  }
+
+  .native-loop {
+    position: absolute;
+    top: 0;
+    left: 90px;
+    right: 90px;
+    height: 42px;
+    border-top: 3px solid var(--blue);
+    border-left: 3px solid var(--blue);
+    border-right: 3px solid var(--blue);
+    border-radius: 22px 22px 0 0;
+  }
+
+  .native-loop::before {
+    content: "新一轮 = 旧上下文 + 新输入";
+    position: absolute;
+    left: 50%;
+    top: -14px;
+    transform: translateX(-50%);
+    background: #fff;
+    padding: 0 10px;
+    font-size: 13px;
+    color: var(--blue);
+    font-weight: 700;
+  }
+
+  .native-loop::after {
+    content: "";
+    position: absolute;
+    left: -3px;
+    bottom: -8px;
+    width: 0;
+    height: 0;
+    border-top: 10px solid transparent;
+    border-bottom: 10px solid transparent;
+    border-right: 14px solid var(--blue);
+  }
+
+  .native-flow {
+    display: grid;
+    grid-template-columns: 1.05fr 1.55fr 0.9fr 0.95fr 1.15fr;
+    gap: 16px;
+    align-items: center;
+  }
+
+  .node {
+    min-height: 106px;
+    border: 1.5px solid var(--line);
+    border-radius: 18px;
+    background: var(--panel-soft);
+    padding: 14px 14px 12px;
+    position: relative;
+  }
+
+  .node strong {
+    display: block;
+    font-size: 17px;
+    margin-bottom: 6px;
+  }
+
+  .node p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.55;
+  }
+
+  .node-user { border-color: rgba(47, 111, 237, 0.3); }
+  .node-agent { border-color: rgba(31, 157, 139, 0.35); background: rgba(31, 157, 139, 0.05); }
+  .node-llm { border-color: rgba(217, 134, 42, 0.35); background: rgba(217, 134, 42, 0.06); }
+  .node-output { border-color: rgba(47, 111, 237, 0.25); }
+
+  .arrow {
+    position: relative;
+    height: 2px;
+    background: var(--line-strong);
+  }
+
+  .arrow::after {
+    content: "";
+    position: absolute;
+    right: -1px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 0;
+    height: 0;
+    border-top: 8px solid transparent;
+    border-bottom: 8px solid transparent;
+    border-left: 12px solid var(--line-strong);
+  }
+
+  .context-cluster {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 180px;
+    gap: 12px;
+    align-items: center;
+  }
+
+  .context-node {
+    overflow: hidden;
+    min-height: 176px;
+  }
+
+  .stack {
+    display: grid;
+    gap: 8px;
+    margin-top: 0;
+  }
+
+  .stack-card {
+    border: 1px solid rgba(31, 157, 139, 0.18);
+    border-radius: 12px;
+    background: #fff;
+    padding: 8px 10px;
+    box-shadow: 0 4px 10px rgba(24, 48, 70, 0.04);
+  }
+
+  .stack-card:nth-child(2) {
+    margin-left: 10px;
+  }
+
+  .stack-card:nth-child(3) {
+    margin-left: 20px;
+  }
+
+  .stack-panel {
+    border: 1px dashed rgba(31, 157, 139, 0.3);
+    border-radius: 16px;
+    background: rgba(31, 157, 139, 0.04);
+    padding: 10px;
+  }
+
+  .stack-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--teal);
+    margin-bottom: 8px;
+  }
+
+  .stack-label {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--teal);
+    margin-bottom: 3px;
+  }
+
+  .stack-text {
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  .native-hint {
+    margin-top: 14px;
+    color: var(--orange);
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .memory-stage {
+    display: grid;
+    grid-template-columns: 1.1fr 1.15fr 1fr 0.8fr;
+    gap: 14px;
+    align-items: start;
+  }
+
+  .memory-node {
+    min-height: 136px;
+    background: rgba(47, 111, 237, 0.03);
+    border-color: rgba(47, 111, 237, 0.18);
+    padding: 12px 12px 10px;
+  }
+
+  .memory-node strong {
+    font-size: 15px;
+    margin-bottom: 4px;
+  }
+
+  .memory-node p {
+    font-size: 12px;
+  }
+
+  .memory-box {
+    border: 1.5px dashed rgba(31, 157, 139, 0.35);
+    border-radius: 16px;
+    background: rgba(31, 157, 139, 0.04);
+    padding: 14px;
+    min-height: 176px;
+  }
+
+  .memory-box strong,
+  .db-box strong,
+  .augment-box strong,
+  .up-link strong {
+    display: block;
+    font-size: 17px;
+    margin-bottom: 8px;
+  }
+
+  .action-tags {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+  }
+
+  .tag {
+    background: #fff;
+    border: 1px solid rgba(31, 157, 139, 0.24);
+    color: var(--teal);
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .memory-list {
+    display: grid;
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  .memory-item {
+    border: 1px solid rgba(31, 157, 139, 0.16);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.88);
+    padding: 8px 10px;
+  }
+
+  .memory-item-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--teal);
+    margin-bottom: 2px;
+  }
+
+  .memory-item-text {
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  .memory-box p,
+  .db-box p,
+  .augment-box p,
+  .up-link p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.55;
+  }
+
+  .db-box,
+  .augment-box,
+  .up-link {
+    border: 1.5px solid var(--line);
+    border-radius: 16px;
+    background: #fff;
+    padding: 14px;
+    min-height: 176px;
+  }
+
+  .db-box {
+    background: rgba(47, 111, 237, 0.04);
+    border-color: rgba(47, 111, 237, 0.22);
+  }
+
+  .db-items {
+    display: grid;
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  .db-item {
+    border: 1px solid rgba(47, 111, 237, 0.18);
+    border-radius: 12px;
+    background: #fff;
+    padding: 8px 10px;
+  }
+
+  .db-item-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--blue);
+    margin-bottom: 2px;
+  }
+
+  .db-item-text {
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  .store-layer {
+    margin-top: 12px;
+    border-top: 1px dashed rgba(47, 111, 237, 0.22);
+    padding-top: 10px;
+  }
+
+  .store-layer-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--blue);
+    margin-bottom: 6px;
+  }
+
+  .store-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .store-tag {
+    padding: 4px 8px;
+    border-radius: 999px;
+    background: rgba(47, 111, 237, 0.08);
+    border: 1px solid rgba(47, 111, 237, 0.16);
+    color: var(--blue);
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  .mini-arrow {
+    position: absolute;
+    top: 50%;
+    right: -8px;
+    transform: translateY(-50%);
+    width: 18px;
+    height: 2px;
+    background: var(--line-strong);
+  }
+
+  .mini-arrow::after {
+    content: "";
+    position: absolute;
+    right: -1px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 0;
+    height: 0;
+    border-top: 6px solid transparent;
+    border-bottom: 6px solid transparent;
+    border-left: 9px solid var(--line-strong);
+  }
+
+  .bidirectional {
+    position: absolute;
+    left: 50%;
+    top: 100%;
+    transform: translateX(-50%);
+    width: 2px;
+    height: 36px;
+    background: var(--line-strong);
+  }
+
+  .bidirectional::before,
+  .bidirectional::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0;
+    height: 0;
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+  }
+
+  .bidirectional::before {
+    top: -1px;
+    border-bottom: 9px solid var(--line-strong);
+  }
+
+  .bidirectional::after {
+    bottom: -1px;
+    border-top: 9px solid var(--line-strong);
+  }
+
+  .memory-col {
+    position: relative;
+  }
+
+  .augment-box {
+    background: rgba(217, 134, 42, 0.05);
+    border-color: rgba(217, 134, 42, 0.24);
+  }
+
+  .example {
+    margin-top: 10px;
+    border: 1px solid rgba(217, 134, 42, 0.2);
+    border-radius: 12px;
+    background: #fff;
+    padding: 10px;
+  }
+
+  .example-line {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--muted);
+  }
+
+  .example-line strong {
+    display: inline;
+    font-size: 12px;
+    margin: 0;
+    color: var(--text);
+  }
+
+  .up-link {
+    position: relative;
+    background: rgba(47, 111, 237, 0.04);
+    border-color: rgba(47, 111, 237, 0.22);
+  }
+
+  .up-arrow {
+    position: absolute;
+    left: 50%;
+    top: -88px;
+    transform: translateX(-50%);
+    width: 2px;
+    height: 78px;
+    background: var(--blue);
+  }
+
+  .up-arrow::before {
+    content: "";
+    position: absolute;
+    top: -1px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0;
+    height: 0;
+    border-left: 8px solid transparent;
+    border-right: 8px solid transparent;
+    border-bottom: 12px solid var(--blue);
+  }
+
+  .up-caption {
+    margin-top: 10px;
+    color: var(--blue);
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .summary {
+    margin-top: 18px;
+    padding: 14px 16px;
+    border-radius: 16px;
+    background: linear-gradient(90deg, rgba(47, 111, 237, 0.06), rgba(31, 157, 139, 0.08));
+    border: 1px solid rgba(47, 111, 237, 0.12);
+    color: var(--text);
+    font-size: 14px;
+  }
+
+  .note-block {
+    border: 2px dashed var(--note-line);
+    background: var(--note);
+    border-radius: 16px;
+    padding: 16px;
+    min-height: 140px;
+  }
+
+  .note-block strong {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 16px;
+  }
+
+  .note-lines {
+    display: grid;
+    gap: 10px;
+    margin-top: 10px;
+  }
+
+  .note-line {
+    height: 18px;
+    border-bottom: 1px dashed rgba(24, 48, 70, 0.22);
+  }
+
+  .footer {
+    margin-top: 18px;
+    color: var(--muted);
+    font-size: 12px;
+    text-align: center;
+  }
+
+  @media (max-width: 1280px) {
+    .layout {
+      grid-template-columns: 1fr;
+    }
+
+    .sidebar {
+      position: static;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 980px) {
+    .native-flow,
+    .memory-stage {
+      grid-template-columns: 1fr;
+    }
+
+    .context-cluster {
+      grid-template-columns: 1fr;
+    }
+
+    .arrow,
+    .mini-arrow,
+    .up-arrow,
+    .bidirectional,
+    .native-loop {
+      display: none;
+    }
+
+    .native-stage {
+      padding-top: 0;
+    }
+
+    .sidebar {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>
+</head>
+<body>
+  <div class="page">
+    <div class="hero">
+      <h1>Agent 记忆系统流程标注稿</h1>
+      <p>单文件 HTML 原型。先在这个页面上标注逻辑和文案，再收敛成最终图。</p>
+    </div>
+
+    <div class="layout">
+      <main class="canvas">
+        <section class="section">
+          <div class="section-head">
+            <div>
+              <div class="section-kicker">Part 1</div>
+              <h2 class="section-title">原生 Agent 调用 LLM 的循环</h2>
+              <div class="section-sub">重点强调：原生流程并不是完全没记忆，而是把上一轮内容继续堆进上下文。</div>
+            </div>
+            <div class="flow-note">默认依赖“对话上下文累积”</div>
+          </div>
+
+          <div class="native-stage">
+            <div class="native-loop"></div>
+            <div class="native-flow">
+              <div class="node node-user">
+                <strong>用户输入</strong>
+                <p>新问题、新约束、补充说明会进入下一轮。</p>
+              </div>
+              <div class="arrow"></div>
+
+              <div class="context-cluster">
+                <div class="node node-agent context-node">
+                  <strong>Agent 组装当前上下文</strong>
+                  <p>把已有对话和本轮输入一起打包，再送给 LLM。</p>
+                  <div class="native-hint">越往后越长，也可能越混杂</div>
+                </div>
+                <div class="stack-panel">
+                  <div class="stack-title">上下文如何一轮轮累加</div>
+                  <div class="stack">
+                    <div class="stack-card">
+                      <div class="stack-label">第 1 轮</div>
+                      <div class="stack-text">当前问题</div>
+                    </div>
+                    <div class="stack-card">
+                      <div class="stack-label">第 2 轮</div>
+                      <div class="stack-text">当前问题 + 上轮回答</div>
+                    </div>
+                    <div class="stack-card">
+                      <div class="stack-label">第 3 轮</div>
+                      <div class="stack-text">当前问题 + 上轮回答 + 新约束</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="arrow"></div>
+
+              <div class="node node-llm">
+                <strong>调用 LLM</strong>
+                <p>LLM 只看到被送进去的上下文，不会主动读数据库。</p>
+              </div>
+              <div class="arrow"></div>
+
+              <div class="node node-output">
+                <strong>LLM 输出结果</strong>
+                <p>生成回答或动作建议，再交回给 Agent。</p>
+              </div>
+              <div class="arrow"></div>
+
+              <div class="node node-user">
+                <strong>Agent 执行动作 / 回复用户</strong>
+                <p>结果回到对话里，进入下一轮迭代。</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="section-head">
+            <div>
+              <div class="section-kicker">Part 2</div>
+              <h2 class="section-title">记忆系统加入后：只新增调用前这一步</h2>
+              <div class="section-sub">下方不重复主流程，只表达新增模块如何在调用前补充上下文。</div>
+            </div>
+            <div class="flow-note">不是替 LLM 回答，而是先补上下文</div>
+          </div>
+
+          <div class="memory-stage">
+            <div class="node node-user memory-node">
+              <strong>当前请求</strong>
+              <p>例如：继续昨天那个旅行计划。</p>
+            </div>
+
+            <div class="memory-col">
+              <div class="memory-box">
+                <strong>记忆系统</strong>
+                <div class="action-tags">
+                  <span class="tag">上下文工程</span>
+                  <span class="tag">按需注入</span>
+                </div>
+                <div class="memory-list">
+                  <div class="memory-item">
+                    <div class="memory-item-title">历史会话压缩</div>
+                    <div class="memory-item-text">把长对话压成短摘要，保留目标、约束和当前进度。</div>
+                  </div>
+                  <div class="memory-item">
+                    <div class="memory-item-title">工具结果压缩</div>
+                    <div class="memory-item-text">把搜索、执行、观察结果收敛成可继续推理的关键信息。</div>
+                  </div>
+                  <div class="memory-item">
+                    <div class="memory-item-title">记忆按需注入</div>
+                    <div class="memory-item-text">只把当前请求真正相关的历史、偏好和任务状态补进上下文。</div>
+                  </div>
+                </div>
+              </div>
+              <div class="mini-arrow"></div>
+              <div class="bidirectional"></div>
+            </div>
+
+            <div class="db-box">
+              <strong>记忆编排 / 统一上下文</strong>
+              <p>这一层不只是存取数据，还负责按层提取、统一整理，再交给上面的记忆系统做注入。</p>
+              <div class="db-items">
+                <div class="db-item">
+                  <div class="db-item-title">记忆分层提取</div>
+                  <div class="db-item-text">区分短期对话、长期偏好、任务状态，避免所有信息混在一起。</div>
+                </div>
+                <div class="db-item">
+                  <div class="db-item-title">统一上下文整理</div>
+                  <div class="db-item-text">把历史会话、工具结果、用户偏好整理成一份可直接使用的上下文材料。</div>
+                </div>
+                <div class="db-item">
+                  <div class="db-item-title">原始材料来源</div>
+                  <div class="db-item-text">上层用到的信息，最终都来自底层存储里的历史记录和状态数据。</div>
+                </div>
+              </div>
+              <div class="store-layer">
+                <div class="store-layer-title">底层数据库 / 存储能力</div>
+                <div class="store-tags">
+                  <span class="store-tag">历史对话</span>
+                  <span class="store-tag">用户偏好</span>
+                  <span class="store-tag">任务记录</span>
+                  <span class="store-tag">工具结果</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="augment-box">
+              <strong>补充后的上下文</strong>
+              <p>把原问题和相关记忆一起整理好，再并入上方的“Agent 组装当前上下文”。</p>
+              <div class="example">
+                <div class="example-line"><strong>原问题：</strong>“帮我继续昨天那个旅行计划”</div>
+                <div class="example-line"><strong>补充信息：</strong>“想去日本；预算 1 万；已定东京 5 天”</div>
+              </div>
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;">
+            <div class="up-link">
+              <div class="up-arrow"></div>
+              <strong>并回上方原生流程</strong>
+              <p>新增模块最终只做一件事：把更相关、更短、更有用的信息送回“Agent 组装当前上下文”。</p>
+              <div class="up-caption">记忆系统 -> Context Builder -> LLM</div>
+            </div>
+
+            <div class="note-block">
+              <strong>你的标注区</strong>
+              <div>在这里写修改意见，例如：删字、换例子、改箭头、增减节点。</div>
+              <div class="note-lines">
+                <div class="note-line"></div>
+                <div class="note-line"></div>
+                <div class="note-line"></div>
+                <div class="note-line"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="summary">结论：原生流程靠上下文不断堆叠；记忆系统的作用，是在调用前更有选择地把相关信息补进上下文。</div>
+        </section>
+
+        <div class="footer">这个文件是标注稿，不是最终视觉稿。定好逻辑后，再压缩成最终演示图或海报图。</div>
+      </main>
+
+      <aside class="sidebar">
+        <div class="side-card">
+          <h3>怎么使用</h3>
+          <ul>
+            <li>先看结构是不是对。</li>
+            <li>再改节点名字和示例文案。</li>
+            <li>最后再决定要不要做成更像海报的视觉稿。</li>
+          </ul>
+        </div>
+
+        <div class="side-card">
+          <h3>建议你标注的点</h3>
+          <ul>
+            <li>上方“上下文堆叠”够不够明显。</li>
+            <li>下方是否只保留新增流程，没有重复主链路。</li>
+            <li>数据库和记忆系统的关系是否讲清楚。</li>
+            <li>旅行计划这个例子要不要换成更贴近你的场景。</li>
+          </ul>
+        </div>
+
+        <div class="side-card">
+          <h3>可继续收敛的方向</h3>
+          <ul>
+            <li>更像架构图：继续删字，只保留框和箭头。</li>
+            <li>更像汇报页：保留示例，加少量强调色。</li>
+            <li>更像海报：在逻辑定稿后再做插画化处理。</li>
+          </ul>
+        </div>
+      </aside>
+    </div>
+  </div>
+</body>
+</html>

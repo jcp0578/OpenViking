@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent 记忆系统：一个场景讲透</title>
+<style>
+  :root {
+    --bg: #0e1117; --card: #161b2e; --border: #262d45;
+    --text: #e4e8f0; --dim: #7a84a0;
+    --purple: #8b7cf8; --cyan: #00d2c6; --red: #ff6b6b;
+    --green: #51cf66; --orange: #ffad42; --blue: #5b9ef5;
+    --yellow: #ffe066;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{
+    font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+    background:var(--bg);color:var(--text);
+    padding:2.5rem 2rem;line-height:1.7;
+  }
+  .page{max-width:1140px;margin:0 auto}
+
+  /* title */
+  .page-title{text-align:center;margin-bottom:2.5rem}
+  .page-title h1{font-size:1.5rem;font-weight:800}
+  .page-title p{color:var(--dim);font-size:0.88rem;margin-top:0.3rem}
+
+  /* === PART A: comparison === */
+  .part-label{
+    font-size:0.7rem;font-weight:700;letter-spacing:0.1em;
+    text-transform:uppercase;color:var(--dim);margin-bottom:0.6rem;
+  }
+  .cmp{
+    display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;
+    margin-bottom:3rem;
+  }
+  @media(max-width:760px){.cmp{grid-template-columns:1fr}}
+  .cmp-card{
+    border-radius:14px;padding:1.5rem 1.6rem;
+    border:1.5px solid var(--border);position:relative;
+  }
+  .cmp-card.bad{
+    background:linear-gradient(135deg,#1c1320,var(--card));
+    border-color:rgba(255,107,107,0.3);
+  }
+  .cmp-card.good{
+    background:linear-gradient(135deg,#132018,var(--card));
+    border-color:rgba(81,207,102,0.3);
+  }
+  .cmp-tag{
+    display:inline-block;font-size:0.72rem;font-weight:700;
+    padding:0.2rem 0.6rem;border-radius:20px;margin-bottom:1rem;
+  }
+  .bad .cmp-tag{background:rgba(255,107,107,0.12);color:var(--red)}
+  .good .cmp-tag{background:rgba(81,207,102,0.12);color:var(--green)}
+
+  .dialog{margin-bottom:0.8rem}
+  .d-row{display:flex;gap:0.6rem;margin-bottom:0.6rem;align-items:flex-start}
+  .d-who{
+    flex-shrink:0;width:28px;height:28px;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;font-size:0.85rem;
+    background:#252a40;
+  }
+  .d-say{
+    background:#1e2338;padding:0.45rem 0.8rem;border-radius:10px;
+    font-size:0.84rem;max-width:88%;line-height:1.55;
+  }
+  .d-say.faded{color:var(--dim);font-style:italic;background:transparent;padding-left:0}
+  .cmp-result{
+    margin-top:0.6rem;padding-top:0.8rem;border-top:1px solid var(--border);
+    display:flex;gap:1.25rem;flex-wrap:wrap;
+  }
+  .cmp-metric{text-align:center}
+  .cmp-metric .val{font-size:1.4rem;font-weight:800}
+  .bad .cmp-metric .val{color:var(--red)}
+  .good .cmp-metric .val{color:var(--green)}
+  .cmp-metric .lbl{font-size:0.7rem;color:var(--dim)}
+
+  /* === PART B: main flow === */
+  .flow{position:relative;margin-bottom:2rem}
+  .flow-spine{
+    position:absolute;left:32px;top:0;bottom:0;width:2px;
+    background:linear-gradient(to bottom,var(--purple),var(--cyan),var(--orange));
+    border-radius:2px;
+  }
+  .step{
+    position:relative;padding-left:76px;margin-bottom:2rem;
+    min-height:60px;
+  }
+  .step:last-child{margin-bottom:0}
+  .step-dot{
+    position:absolute;left:23px;top:4px;width:20px;height:20px;
+    border-radius:50%;border:3px solid var(--bg);z-index:2;
+  }
+  .step-num{
+    position:absolute;left:0;top:3px;width:20px;
+    font-size:0.7rem;font-weight:700;color:var(--dim);text-align:right;
+  }
+  .step-head{display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem;flex-wrap:wrap}
+  .step-title{font-size:1rem;font-weight:700}
+  .step-role{
+    font-size:0.65rem;font-weight:600;padding:0.15rem 0.5rem;
+    border-radius:4px;
+  }
+  .role-user{background:rgba(139,124,248,0.12);color:var(--purple)}
+  .role-llm{background:rgba(139,124,248,0.12);color:var(--purple)}
+  .role-mem{background:rgba(255,173,66,0.12);color:var(--orange)}
+  .role-db{background:rgba(0,210,198,0.12);color:var(--cyan)}
+  .role-cpu{background:rgba(255,173,66,0.12);color:var(--orange)}
+
+  .step-body{
+    background:var(--card);border:1px solid var(--border);
+    border-radius:12px;padding:1rem 1.2rem;
+  }
+  .step-body p{font-size:0.85rem;color:var(--dim);margin-bottom:0.5rem}
+  .step-body p:last-child{margin-bottom:0}
+  .step-body strong{color:var(--text)}
+
+  /* data box inside step */
+  .data-box{
+    background:#111626;border:1px solid var(--border);border-radius:8px;
+    padding:0.7rem 0.9rem;margin-top:0.6rem;font-size:0.8rem;
+    font-family:"SF Mono","Fira Code",monospace;line-height:1.65;
+    overflow-x:auto;
+  }
+  .data-box .k{color:var(--cyan)}
+  .data-box .v{color:var(--yellow)}
+  .data-box .c{color:var(--dim)}
+
+  /* highlight box */
+  .insight{
+    background:rgba(0,210,198,0.05);border:1px solid rgba(0,210,198,0.2);
+    border-radius:8px;padding:0.7rem 0.9rem;margin-top:0.6rem;
+    font-size:0.82rem;color:var(--cyan);
+  }
+  .insight strong{color:var(--text)}
+
+  /* === PART C: DB summary === */
+  .db-summary{
+    background:var(--card);border:1.5px solid rgba(0,210,198,0.25);
+    border-radius:16px;padding:1.75rem;margin-top:1rem;
+  }
+  .db-summary h3{font-size:1.1rem;font-weight:700;margin-bottom:1rem;text-align:center}
+  .db-grid{
+    display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+    gap:0.75rem;
+  }
+  .db-item{
+    display:flex;gap:0.75rem;align-items:flex-start;
+    background:rgba(0,210,198,0.04);border:1px solid rgba(0,210,198,0.12);
+    border-radius:10px;padding:0.8rem 1rem;
+  }
+  .db-item .di-icon{font-size:1.3rem;flex-shrink:0;margin-top:2px}
+  .db-item .di-title{font-size:0.88rem;font-weight:700;margin-bottom:0.15rem}
+  .db-item .di-desc{font-size:0.78rem;color:var(--dim);line-height:1.5}
+  .db-item .di-example{
+    font-size:0.73rem;color:var(--cyan);margin-top:0.3rem;
+    font-style:italic;
+  }
+
+  /* footer */
+  .foot{
+    text-align:center;margin-top:2.5rem;padding-top:1.5rem;
+    border-top:1px solid var(--border);color:var(--dim);font-size:0.78rem;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+<div class="page-title">
+  <h1>Agent 记忆系统：用一个场景讲透全流程</h1>
+  <p>看同一个用户的第 10 次对话，记忆系统和数据库在背后做了什么</p>
+</div>
+
+<!-- ============================== -->
+<!-- PART A: 对比                    -->
+<!-- ============================== -->
+<div class="part-label">Part A &mdash; 有无记忆的差距</div>
+<div class="cmp">
+  <div class="cmp-card bad">
+    <div class="cmp-tag">没有记忆的 Agent</div>
+    <div class="dialog">
+      <div class="d-row"><div class="d-who">👤</div><div class="d-say">帮我订明天去上海的机票，老规矩。</div></div>
+      <div class="d-row"><div class="d-who">🤖</div><div class="d-say">好的！请问您从哪个城市出发？偏好什么时间段？经济舱还是商务舱？靠窗还是靠过道？……</div></div>
+      <div class="d-row"><div class="d-who">👤</div><div class="d-say faded">（第 10 次被问同样的问题……）</div></div>
+    </div>
+    <div class="cmp-result">
+      <div class="cmp-metric"><div class="val">5 轮</div><div class="lbl">才能开始干活</div></div>
+      <div class="cmp-metric"><div class="val">~4000</div><div class="lbl">Tokens 重复浪费</div></div>
+      <div class="cmp-metric"><div class="val">0</div><div class="lbl">个性化程度</div></div>
+    </div>
+  </div>
+  <div class="cmp-card good">
+    <div class="cmp-tag">有记忆的 Agent</div>
+    <div class="dialog">
+      <div class="d-row"><div class="d-who">👤</div><div class="d-say">帮我订明天去上海的机票，老规矩。</div></div>
+      <div class="d-row"><div class="d-who">🤖</div><div class="d-say">好的！已查询明天北京→上海的早班航班，经济舱靠窗。有两个选项：<br>① 7:00 CA1501 ¥680<br>② 8:30 MU5101 ¥720<br>您选哪个？</div></div>
+      <div class="d-row"><div class="d-who">👤</div><div class="d-say faded">（一句话搞定，它全记得！）</div></div>
+    </div>
+    <div class="cmp-result">
+      <div class="cmp-metric"><div class="val">1 轮</div><div class="lbl">直接出结果</div></div>
+      <div class="cmp-metric"><div class="val">~200</div><div class="lbl">Tokens 精准投喂</div></div>
+      <div class="cmp-metric"><div class="val">100%</div><div class="lbl">完全个性化</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================== -->
+<!-- PART B: 全流程拆解              -->
+<!-- ============================== -->
+<div class="part-label">Part B &mdash; 记忆是怎么产生和被用上的（全流程拆解）</div>
+
+<div class="flow">
+  <div class="flow-spine"></div>
+
+  <!-- Step 1 -->
+  <div class="step">
+    <div class="step-num">①</div>
+    <div class="step-dot" style="background:var(--purple)"></div>
+    <div class="step-head">
+      <span class="step-title">用户说了一句话</span>
+      <span class="step-role role-user">用户</span>
+    </div>
+    <div class="step-body">
+      <p>用户在第 3 次对话中说：</p>
+      <div class="data-box">
+        "我只坐<span class="v">早班</span>飞机，<span class="v">经济舱</span>就行，<span class="v">靠窗</span>位置。
+         对了我一般从<span class="v">北京</span>出发。"
+      </div>
+      <p>这句话里藏着 <strong>4 条值得记住的信息</strong>，但也混着大量废话。</p>
+    </div>
+  </div>
+
+  <!-- Step 2 -->
+  <div class="step">
+    <div class="step-num">②</div>
+    <div class="step-dot" style="background:var(--orange)"></div>
+    <div class="step-head">
+      <span class="step-title">记忆系统：提取关键信息</span>
+      <span class="step-role role-mem">记忆系统</span>
+      <span class="step-role role-llm">LLM 辅助</span>
+    </div>
+    <div class="step-body">
+      <p>记忆系统从对话中<strong>提取</strong>出结构化信息，过滤掉噪音：</p>
+      <div class="data-box">
+<span class="c">// 提取结果</span>
+<span class="k">类别</span>: <span class="v">用户偏好 (Preferences)</span>
+<span class="k">摘要</span>: <span class="v">"出行偏好：早班机、经济舱、靠窗、从北京出发"</span>
+<span class="k">详情</span>: <span class="v">"用户明确表示只坐早班飞机，选择经济舱，偏好靠窗座位。常驻城市为北京，出发地默认北京。"</span>
+<span class="k">来源</span>: <span class="v">第 3 次对话</span>
+      </div>
+      <div class="insight">
+        <strong>为什么需要"提取"而不是直接存对话？</strong><br>
+        原始对话有 500 tokens，提取后只有 60 tokens。节省 88% 存储空间，检索时更精准。
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 3 -->
+  <div class="step">
+    <div class="step-num">③</div>
+    <div class="step-dot" style="background:var(--orange)"></div>
+    <div class="step-head">
+      <span class="step-title">编码：把文字变成"坐标"</span>
+      <span class="step-role role-cpu">CPU / 模型</span>
+    </div>
+    <div class="step-body">
+      <p>为了以后能<strong>按意思查找</strong>（而不只是按关键词），需要把文本转成一组数字——<strong>向量</strong>：</p>
+      <div class="data-box">
+<span class="c">// 原始文本</span>
+<span class="v">"出行偏好：早班机、经济舱、靠窗、从北京出发"</span>
+
+<span class="c">// → 经过 Embedding 模型 → 变成 1536 维向量</span>
+<span class="k">向量</span>: [<span class="v">0.023, -0.118, 0.045, 0.892, ..., -0.034</span>]
+      </div>
+      <p>意思相近的文字，向量也相近。以后用户说"订机票"，系统就能靠<strong>向量距离</strong>找到这条偏好。</p>
+    </div>
+  </div>
+
+  <!-- Step 4 -->
+  <div class="step">
+    <div class="step-num">④</div>
+    <div class="step-dot" style="background:var(--cyan)"></div>
+    <div class="step-head">
+      <span class="step-title">存入数据库</span>
+      <span class="step-role role-db">数据库</span>
+    </div>
+    <div class="step-body">
+      <p>一条记忆在数据库里长这样——<strong>文本、向量、标签存在一起</strong>，全部可检索：</p>
+      <div class="data-box">
+┌─────────────────────────────────────────────────────────────┐
+│ <span class="k">uri</span>        <span class="v">/user/alice/preferences/travel</span>                     │
+│ <span class="k">摘要</span>(L0)   <span class="v">"出行偏好：早班、经济舱、靠窗、北京出发"</span>           │
+│ <span class="k">详情</span>(L2)   <span class="v">"用户明确表示只坐早班飞机……常驻城市北京"</span>          │
+│ <span class="k">向量</span>       <span class="v">[0.023, -0.118, 0.045, ...]</span>  <span class="c">← 按意思检索</span>     │
+│ <span class="k">标签</span>       <span class="v">type=偏好  user=alice</span>       <span class="c">← 按条件过滤</span>     │
+│ <span class="k">访问次数</span>   <span class="v">0</span>                            <span class="c">← 冷热判断依据</span>   │
+│ <span class="k">更新时间</span>   <span class="v">2026-05-01 14:30</span>             <span class="c">← 新鲜度依据</span>     │
+└─────────────────────────────────────────────────────────────┘
+      </div>
+      <div class="insight">
+        <strong>数据库在这一步做了什么？</strong><br>
+        ❶ 检查有没有重复记忆（向量相似度 > 95% → 合并而不是新建）<br>
+        ❷ 对向量建索引（HNSW），以后能毫秒级搜到<br>
+        ❸ 写入即可检索，不用等批量刷新
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 5 -->
+  <div class="step">
+    <div class="step-num">⑤</div>
+    <div class="step-dot" style="background:#555"></div>
+    <div class="step-head">
+      <span class="step-title">一周后……用户回来了</span>
+    </div>
+    <div class="step-body">
+      <div class="data-box">
+        <span class="v">"帮我订明天去上海的机票，老规矩。"</span>
+      </div>
+      <p>用户没说从哪出发、什么时间、什么舱位。<strong>如果没有记忆，Agent 只能追问。</strong></p>
+    </div>
+  </div>
+
+  <!-- Step 6 -->
+  <div class="step">
+    <div class="step-num">⑥</div>
+    <div class="step-dot" style="background:var(--cyan)"></div>
+    <div class="step-head">
+      <span class="step-title">数据库：精准召回记忆</span>
+      <span class="step-role role-db">数据库</span>
+    </div>
+    <div class="step-body">
+      <p>记忆系统把用户的话转成向量，去数据库里搜：</p>
+      <div class="data-box">
+<span class="c">// 查询</span>
+<span class="k">语义搜索</span>:  "订机票" 的向量 → 找最相关的记忆
+<span class="k">条件过滤</span>:  user = alice  AND  type = 偏好
+<span class="k">排序规则</span>:  相关度 × 0.6 + 新鲜度 × 0.2 + 使用频率 × 0.2
+
+<span class="c">// 返回结果（3ms）</span>
+<span class="k">命中 #1</span> <span class="v">"出行偏好：早班、经济舱、靠窗、北京出发"</span>  <span class="c">相关度 0.94</span>
+<span class="k">命中 #2</span> <span class="v">"上次去上海住的全季酒店，觉得不错"</span>      <span class="c">相关度 0.71</span>
+      </div>
+      <div class="insight">
+        <strong>数据库在这一步做了什么？</strong><br>
+        ❶ 在 alice 的记忆分区里搜索（分区索引，不扫别人的数据）<br>
+        ❷ 向量相似度 + 标签过滤同时执行（不是先搜再过滤）<br>
+        ❸ 多维度综合排序，把最有用的记忆排在最前面<br>
+        ❹ 自动更新访问次数 active_count += 1（热门记忆不会被淘汰）
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 7 -->
+  <div class="step">
+    <div class="step-num">⑦</div>
+    <div class="step-dot" style="background:var(--orange)"></div>
+    <div class="step-head">
+      <span class="step-title">组装上下文：只给 LLM 最有用的</span>
+      <span class="step-role role-mem">记忆系统</span>
+    </div>
+    <div class="step-body">
+      <p>从召回的记忆中挑选，在 <strong>Token 预算</strong>内组装最优上下文：</p>
+      <div class="data-box">
+<span class="c">// 发给 LLM 的上下文（精简后仅 ~200 tokens）</span>
+<span class="k">用户偏好</span>: <span class="v">早班机 | 经济舱 | 靠窗 | 默认从北京出发</span>
+<span class="k">历史参考</span>: <span class="v">上次去上海住全季酒店，评价好</span>
+<span class="k">当前请求</span>: <span class="v">"帮我订明天去上海的机票，老规矩"</span>
+      </div>
+      <p>对比：<strong>没有记忆时</strong>，需要用户花 5 轮对话、~4000 tokens 重复提供这些信息。</p>
+    </div>
+  </div>
+
+  <!-- Step 8 -->
+  <div class="step">
+    <div class="step-num">⑧</div>
+    <div class="step-dot" style="background:var(--purple)"></div>
+    <div class="step-head">
+      <span class="step-title">LLM 生成个性化回复</span>
+      <span class="step-role role-llm">大模型</span>
+    </div>
+    <div class="step-body">
+      <div class="data-box">
+        🤖 <span class="v">"已查询明天北京→上海的早班航班，经济舱靠窗：
+         ① 7:00 CA1501 ¥680
+         ② 8:30 MU5101 ¥720
+         另外上次您住的全季酒店还有房，需要一起订吗？"</span>
+      </div>
+      <p>一句话搞定。不是因为 LLM 更聪明了，而是因为它<strong>拿到了正确的记忆</strong>。</p>
+    </div>
+  </div>
+</div>
+
+<!-- ============================== -->
+<!-- PART C: DB 能力总结              -->
+<!-- ============================== -->
+<div class="part-label">Part C &mdash; 整个过程中，数据库提供了哪些基础能力</div>
+
+<div class="db-summary">
+  <h3>数据库 = 记忆系统的基础设施</h3>
+  <div class="db-grid">
+    <div class="db-item">
+      <div class="di-icon">📦</div>
+      <div>
+        <div class="di-title">混合存储</div>
+        <div class="di-desc">文本、向量、标签存在同一行，不用跨系统拼装</div>
+        <div class="di-example">→ 步骤④ 一条记忆 = 文本 + 向量 + 标签</div>
+      </div>
+    </div>
+    <div class="db-item">
+      <div class="di-icon">🔎</div>
+      <div>
+        <div class="di-title">混合检索</div>
+        <div class="di-desc">按意思搜 + 按条件过滤，在索引层一次完成</div>
+        <div class="di-example">→ 步骤⑥ 语义搜索 + user=alice 同时执行</div>
+      </div>
+    </div>
+    <div class="db-item">
+      <div class="di-icon">📊</div>
+      <div>
+        <div class="di-title">多维排序</div>
+        <div class="di-desc">相关度 × 新鲜度 × 使用频率，综合打分</div>
+        <div class="di-example">→ 步骤⑥ 三路加权排序，只返回最有用的</div>
+      </div>
+    </div>
+    <div class="db-item">
+      <div class="di-icon">🔁</div>
+      <div>
+        <div class="di-title">写入去重</div>
+        <div class="di-desc">新记忆与已有记忆太相似时，自动合并而非重复创建</div>
+        <div class="di-example">→ 步骤④ 相似度 > 95% 就合并</div>
+      </div>
+    </div>
+    <div class="db-item">
+      <div class="di-icon">🔥</div>
+      <div>
+        <div class="di-title">冷热管理</div>
+        <div class="di-desc">常用记忆放快盘，长期不用的自动沉降到便宜存储</div>
+        <div class="di-example">→ 步骤⑥ 命中后 active_count +1，热记忆不被淘汰</div>
+      </div>
+    </div>
+    <div class="db-item">
+      <div class="di-icon">🏛️</div>
+      <div>
+        <div class="di-title">租户隔离</div>
+        <div class="di-desc">每个用户/Agent 有独立的索引分区，互不干扰</div>
+        <div class="di-example">→ 步骤⑥ 只在 alice 的分区搜，不碰别人</div>
+      </div>
+    </div>
+    <div class="db-item">
+      <div class="di-icon">🛡️</div>
+      <div>
+        <div class="di-title">安全防护</div>
+        <div class="di-desc">存储加密 · 访问审计 · 动态脱敏 · 写入校验</div>
+        <div class="di-example">→ 敏感信息加密落盘，恶意内容写入时拦截</div>
+      </div>
+    </div>
+    <div class="db-item">
+      <div class="di-icon">💰</div>
+      <div>
+        <div class="di-title">成本优化</div>
+        <div class="di-desc">向量压缩 · 按需索引 · 批量处理 · 精度可调</div>
+        <div class="di-example">→ 向量量化后存储降 4-33 倍，召回率几乎不变</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="foot">
+  Agent Memory Architecture &middot; OpenViking
+</div>
+
+</div>
+</body>
+</html>
