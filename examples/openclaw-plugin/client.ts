@@ -26,6 +26,7 @@ export type FindResult = {
 
 export type CaptureMode = "semantic" | "keyword";
 export type ScopeName = "user" | "agent";
+type NamespaceRetryHint = "user_requires_agent" | "agent_requires_user";
 export type AgentScopeMode = "user_agent" | "agent";
 export type RuntimeIdentity = {
   userId: string;
@@ -338,6 +339,18 @@ export class OpenVikingClient {
         headers.set("Content-Type", "application/json");
       }
 
+      if (this.routingDebugLog) {
+        this.routingDebugLog(
+          `openviking: request ${path} ` +
+            JSON.stringify({
+              X_OpenViking_Agent: effectiveAgentId || null,
+              X_OpenViking_Account: tenantHeaders.accountId ?? null,
+              X_OpenViking_User: tenantHeaders.userId ?? null,
+              hasApiKey: Boolean(tenantHeaders.apiKey),
+            }),
+        );
+      }
+
       const response = await fetch(`${this.baseUrl}${path}`, {
         ...init,
         headers,
@@ -425,6 +438,56 @@ export class OpenVikingClient {
     return `${root}/${parts.join("/")}`;
   }
 
+  private inferNamespaceRetryHint(error: unknown): NamespaceRetryHint | null {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("User URI must include /agent/{agent_id}")) {
+      return "user_requires_agent";
+    }
+    if (message.includes("Agent URI must include /user/{user_id}")) {
+      return "agent_requires_user";
+    }
+    return null;
+  }
+
+  private buildAccountScopedRetryAgentId(agentId?: string): string | null {
+    const effectiveAgentId = this.resolveEffectiveAgentId(agentId).trim();
+    const accountId = this.resolveTenantHeaders().accountId?.trim() ?? "";
+    if (!effectiveAgentId || !accountId) {
+      return null;
+    }
+    if (effectiveAgentId === accountId || effectiveAgentId.startsWith(`${accountId}_`)) {
+      return null;
+    }
+    return `${accountId}_${effectiveAgentId}`;
+  }
+
+  private async buildFallbackTargetUri(
+    targetUri: string,
+    hint: NamespaceRetryHint,
+    agentId?: string,
+  ): Promise<string | null> {
+    const trimmed = targetUri.trim().replace(/\/+$/, "");
+    const match = trimmed.match(/^viking:\/\/(user|agent)(?:\/(.*))?$/);
+    if (!match) {
+      return null;
+    }
+    const scope = match[1] as ScopeName;
+    const rawRest = (match[2] ?? "").trim();
+    const parts = rawRest.split("/").filter(Boolean);
+    if (parts.length === 0) {
+      return null;
+    }
+
+    const identity = await this.getRuntimeIdentity(agentId);
+    if (hint === "user_requires_agent" && scope === "user" && !parts.includes("agent")) {
+      return `viking://user/${identity.userId}/agent/${identity.agentId}/${parts.join("/")}`;
+    }
+    if (hint === "agent_requires_user" && scope === "agent" && !parts.includes("user")) {
+      return `viking://agent/${identity.agentId}/user/${identity.userId}/${parts.join("/")}`;
+    }
+    return null;
+  }
+
   async find(
     query: string,
     options: {
@@ -444,27 +507,73 @@ export class OpenVikingClient {
     const effectiveAgentId = this.resolveEffectiveAgentId(agentId);
     const identity = await this.getRuntimeIdentity(agentId);
     const tenantHeaders = this.resolveTenantHeaders();
-    this.routingDebugLog?.(
-      `openviking: find POST ${this.baseUrl}/api/v1/search/find ` +
-        JSON.stringify({
-          X_OpenViking_Agent: effectiveAgentId,
-          X_OpenViking_Account: tenantHeaders.accountId ?? null,
-          X_OpenViking_User: tenantHeaders.userId ?? null,
-          resolved_user_id: identity.userId,
-          target_uri: normalizedTargetUri,
-          target_uri_input: options.targetUri,
-          query:
-            query.length > 4000
-              ? `${query.slice(0, 4000)}…(+${query.length - 4000} more chars)`
-              : query,
-          limit: body.limit,
-          score_threshold: body.score_threshold ?? null,
-        }),
-    );
-    return this.request<FindResult>("/api/v1/search/find", {
-      method: "POST",
-      body: JSON.stringify(body),
-    }, agentId);
+    const logFindRequest = (
+      targetUri: string,
+      requestAgentId: string,
+      requestIdentityUserId: string,
+      retryHint?: NamespaceRetryHint,
+    ) => {
+      this.routingDebugLog?.(
+        `openviking: find POST ${this.baseUrl}/api/v1/search/find ` +
+          JSON.stringify({
+            X_OpenViking_Agent: requestAgentId,
+            X_OpenViking_Account: tenantHeaders.accountId ?? null,
+            X_OpenViking_User: tenantHeaders.userId ?? null,
+            resolved_user_id: requestIdentityUserId,
+            target_uri: targetUri,
+            target_uri_input: options.targetUri,
+            retry_hint: retryHint ?? null,
+            query:
+              query.length > 4000
+                ? `${query.slice(0, 4000)}…(+${query.length - 4000} more chars)`
+                : query,
+            limit: body.limit,
+            score_threshold: body.score_threshold ?? null,
+          }),
+      );
+    };
+
+    logFindRequest(normalizedTargetUri, effectiveAgentId, identity.userId);
+    try {
+      return await this.request<FindResult>(
+        "/api/v1/search/find",
+        {
+          method: "POST",
+          body: JSON.stringify(body),
+        },
+        agentId,
+      );
+    } catch (error) {
+      const retryHint = this.inferNamespaceRetryHint(error);
+      if (!retryHint) {
+        throw error;
+      }
+      const retryAgentId = this.buildAccountScopedRetryAgentId(agentId) ?? agentId;
+      const fallbackTargetUri = await this.buildFallbackTargetUri(
+        options.targetUri,
+        retryHint,
+        retryAgentId,
+      );
+      if (!fallbackTargetUri || fallbackTargetUri === normalizedTargetUri) {
+        throw error;
+      }
+      const retryIdentity = await this.getRuntimeIdentity(retryAgentId);
+      const retryBody = { ...body, target_uri: fallbackTargetUri };
+      logFindRequest(
+        fallbackTargetUri,
+        this.resolveEffectiveAgentId(retryAgentId),
+        retryIdentity.userId,
+        retryHint,
+      );
+      return this.request<FindResult>(
+        "/api/v1/search/find",
+        {
+          method: "POST",
+          body: JSON.stringify(retryBody),
+        },
+        retryAgentId,
+      );
+    }
   }
 
   async read(uri: string, agentId?: string): Promise<string> {

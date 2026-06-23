@@ -541,6 +541,136 @@ describe("OpenVikingClient canonical namespace policy", () => {
     expect(body.target_uri).toBe("viking://agent/shared-agent/skills");
   });
 
+  it("retries user memory alias with agent-qualified canonical URI when server requires it", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "alice" });
+      }
+      if (url.endsWith("/api/v1/search/find")) {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        if (body.target_uri === "viking://user/alice/memories") {
+          return errorResponse(
+            "User URI must include /agent/{agent_id} under current policy: viking://user/alice/memories",
+            "INVALID_ARGUMENT",
+          );
+        }
+        if (body.target_uri === "viking://user/alice/agent/my-agent/memories") {
+          return okResponse({ memories: [], total: 0 });
+        }
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenVikingClient(
+      "http://127.0.0.1:1933", "", "my-agent", 5000,
+      "", "", undefined,
+      false,
+      true,
+    );
+    await client.find("test query", { targetUri: "viking://user/memories" }, "my-agent");
+
+    const findCalls = fetchMock.mock.calls.filter((c) =>
+      String(c[0]).endsWith("/api/v1/search/find"),
+    );
+    expect(findCalls).toHaveLength(2);
+    const firstBody = JSON.parse(String((findCalls[0]?.[1] as RequestInit).body));
+    const secondBody = JSON.parse(String((findCalls[1]?.[1] as RequestInit).body));
+    expect(firstBody.target_uri).toBe("viking://user/alice/memories");
+    expect(secondBody.target_uri).toBe("viking://user/alice/agent/my-agent/memories");
+  });
+
+  it("retries with account-prefixed agent namespace when server policy rejects the bare agent id", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "alice" });
+      }
+      if (url.endsWith("/api/v1/search/find")) {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        const headers = new Headers(init?.headers);
+        const agentHeader = headers.get("X-OpenViking-Agent");
+        if (
+          body.target_uri === "viking://user/alice/memories" &&
+          agentHeader === "locomo-eval"
+        ) {
+          return errorResponse(
+            "User URI must include /agent/{agent_id} under current policy: viking://user/alice/memories",
+            "INVALID_ARGUMENT",
+          );
+        }
+        if (
+          body.target_uri === "viking://user/alice/agent/acct-123_locomo-eval/memories" &&
+          agentHeader === "acct-123_locomo-eval"
+        ) {
+          return okResponse({ memories: [{ uri: "viking://user/alice/agent/acct-123_locomo-eval/memories/events/x.md", level: 2 }], total: 1 });
+        }
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenVikingClient(
+      "http://127.0.0.1:1933", "sk-root", "locomo-eval", 5000,
+      "acct-123", "alice", undefined,
+      false,
+      true,
+    );
+    const result = await client.find("test query", { targetUri: "viking://user/memories", limit: 24 }, "locomo-eval");
+
+    expect(result.total).toBe(1);
+    const findCalls = fetchMock.mock.calls.filter((c) =>
+      String(c[0]).endsWith("/api/v1/search/find"),
+    );
+    expect(findCalls).toHaveLength(2);
+    const firstHeaders = new Headers((findCalls[0]?.[1] as RequestInit).headers);
+    const secondHeaders = new Headers((findCalls[1]?.[1] as RequestInit).headers);
+    const firstBody = JSON.parse(String((findCalls[0]?.[1] as RequestInit).body));
+    const secondBody = JSON.parse(String((findCalls[1]?.[1] as RequestInit).body));
+    expect(firstHeaders.get("X-OpenViking-Agent")).toBe("locomo-eval");
+    expect(secondHeaders.get("X-OpenViking-Agent")).toBe("acct-123_locomo-eval");
+    expect(firstBody.target_uri).toBe("viking://user/alice/memories");
+    expect(secondBody.target_uri).toBe("viking://user/alice/agent/acct-123_locomo-eval/memories");
+  });
+
+  it("retries agent memory alias with user-qualified canonical URI when server requires it", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "alice" });
+      }
+      if (url.endsWith("/api/v1/search/find")) {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        if (body.target_uri === "viking://agent/shared-agent/memories") {
+          return errorResponse(
+            "Agent URI must include /user/{user_id} under current policy: viking://agent/shared-agent/memories",
+            "INVALID_ARGUMENT",
+          );
+        }
+        if (body.target_uri === "viking://agent/shared-agent/user/alice/memories") {
+          return okResponse({ memories: [], total: 0 });
+        }
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenVikingClient(
+      "http://127.0.0.1:1933", "", "shared-agent", 5000,
+      "", "", undefined,
+      false,
+      false,
+    );
+    await client.find("test query", { targetUri: "viking://agent/memories" }, "shared-agent");
+
+    const findCalls = fetchMock.mock.calls.filter((c) =>
+      String(c[0]).endsWith("/api/v1/search/find"),
+    );
+    expect(findCalls).toHaveLength(2);
+    const firstBody = JSON.parse(String((findCalls[0]?.[1] as RequestInit).body));
+    const secondBody = JSON.parse(String((findCalls[1]?.[1] as RequestInit).body));
+    expect(firstBody.target_uri).toBe("viking://agent/shared-agent/memories");
+    expect(secondBody.target_uri).toBe("viking://agent/shared-agent/user/alice/memories");
+  });
+
   it("includes role_id when addSessionMessage receives one", async () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse({ session_id: "s1" }));
     vi.stubGlobal("fetch", fetchMock);
